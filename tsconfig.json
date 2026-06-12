@@ -1,25 +1,33 @@
 {
   "compilerOptions": {
-    "module": "ES2022",
-    "declaration": false,
-    "noImplicitAny": false,
-    "noEmitOnError": true,
-    "pretty": true,
-    "removeComments": true,
-    "preserveConstEnums": true,
-    "sourceMap": true,
-    "noEmitHelpers": false,
-    "importHelpers": false,
-    "esModuleInterop": true,
-    "moduleResolution": "bundler",
     "target": "es6",
-    "noEmit": true,
+    "module": "ES2022",
+    "moduleResolution": "bundler",
     "lib": [
       "ESNext",
       "DOM"
-    ]
+    ],
+    "strict": true,
+    // TODO(strict): the inherited upstream code base (document-parser, renderers)
+    // predates strict mode. Implicit any and null-safety violations are pervasive
+    // there; they are being burned down incrementally. New code must compile with
+    // these two overrides removed.
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+    // TODO(strict): implied off while strictNullChecks is off; remove together.
+    "strictPropertyInitialization": false,
+    "declaration": false,
+    "noEmit": true,
+    "noEmitOnError": true,
+    "sourceMap": true,
+    "removeComments": true,
+    "preserveConstEnums": true,
+    "esModuleInterop": true,
+    "importHelpers": false,
+    "noEmitHelpers": false,
+    "pretty": true
   },
-  "exclude": [
-    "node_modules"
+  "include": [
+    "src"
   ]
 }

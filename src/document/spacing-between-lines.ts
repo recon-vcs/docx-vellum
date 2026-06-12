@@ -62,9 +62,7 @@ export function parseSpacingBetweenLines(elem: Element, xml: XmlParser): Spacing
 				break;
 
 			default:
-				if (this.options.debug) {
-					console.warn(`DOCX:%c Unknown Spacing Property：${attr.localName}`, 'color:#f75607');
-				}
+				break;
 		}
 	}
 	return spacing;

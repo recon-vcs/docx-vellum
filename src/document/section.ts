@@ -252,9 +252,7 @@ export function parseSectionProperties(elem: Element, xml: XmlParser = globalXml
 				break;
 
 			default:
-				if (this.options.debug) {
-					console.warn(`DOCX:%c Unknown Section Property：${elem.localName}`, 'color:#f75607');
-				}
+				break;
 		}
 	}
 	// 根据原始尺寸，计算内容区域的宽高
@@ -308,9 +306,7 @@ function parseDocGrid(elem: Element, xml: XmlParser): DocGrid {
 				break;
 
 			default:
-				if (this.options.debug) {
-					console.warn(`DOCX:%c Unknown Grid Property：${elem.localName}`, 'color:#f75607');
-				}
+				break;
 		}
 	}
 	return grid;

@@ -1,54 +1,60 @@
 import typescript from '@rollup/plugin-typescript';
-import terser from '@rollup/plugin-terser';
 import nodeExternals from 'rollup-plugin-node-externals';
+import dts from 'rollup-plugin-dts';
 
-const umdOutput = {
-	name: "docx",
-	file: 'docs/js/docx-preview.js',
-	sourcemap: true,
-	format: 'umd',
-	globals: {
-		jszip: 'JSZip',
-		konva: 'Konva',
-		"lodash-es": '_',
-	}
+const input = 'src/docx-preview.ts';
+
+const umdGlobals = {
+	jszip: 'JSZip',
+	konva: 'Konva',
+	'lodash-es': '_',
 };
 
-export default args => {
-	const config = {
-		input: 'src/docx-preview.ts',
-		output: [umdOutput],
+export default [
+	{
+		input,
+		output: [
+			{
+				file: 'dist/docx-vellum.mjs',
+				format: 'es',
+				sourcemap: true,
+			},
+			{
+				file: 'dist/docx-vellum.cjs',
+				format: 'cjs',
+				exports: 'named',
+				sourcemap: true,
+			},
+			{
+				// Browser/global build used by the Playwright test harness.
+				file: 'dist/docx-vellum.umd.js',
+				format: 'umd',
+				name: 'docx',
+				globals: umdGlobals,
+				sourcemap: true,
+			},
+			{
+				// Same UMD build, served by the demo pages under docs/.
+				file: 'docs/js/docx-vellum.js',
+				format: 'umd',
+				name: 'docx',
+				globals: umdGlobals,
+				sourcemap: true,
+			},
+		],
 		plugins: [
 			nodeExternals(),
 			typescript(),
 		],
-	}
-
-	if (args.environment === 'BUILD:production') {
-		// 输出配置
-		config.output = [umdOutput,
-			{
-				...umdOutput,
-				file: 'dist/docx-preview.js',
-			},
-			{
-				...umdOutput,
-				file: 'dist/docx-preview.min.js',
-				plugins: [terser()]
-			},
-			{
-				file: 'dist/docx-preview.esm.js',
-				sourcemap: true,
-				format: 'es',
-			},
-			{
-				file: 'dist/docx-preview.esm.min.js',
-				sourcemap: true,
-				format: 'es',
-				plugins: [terser()]
-			},
-		];
-	}
-
-	return config
-};
+	},
+	{
+		input,
+		output: {
+			file: 'dist/docx-vellum.d.ts',
+			format: 'es',
+		},
+		plugins: [
+			dts(),
+		],
+	},
+];

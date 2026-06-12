@@ -10,12 +10,12 @@
 	<script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
 	<script src="https://cdn.jsdelivr.net/npm/konva@9.3.6/konva.min.js"></script>
 	<!--library-->
-	<script src="./js/docx-preview.js"></script>
+	<script src="./js/docx-vellum.js"></script>
 </head>
 
 <body class="vh-100 d-flex flex-column">
 <div class="hstack bg-black">
-	<div class="mx-auto p-3 text-white">docx.renderAsync function</div>
+	<div class="mx-auto p-3 text-white">docx-vellum &mdash; docx.renderAsync demo</div>
 </div>
 
 <div class="hstack p-2 gap-2 bg-light">
@@ -64,7 +64,7 @@
 
 		if (!currentDocument) return;
 
-		docx.renderAsync(currentDocument, document_container, style_container, null, docxOptions)
+		docx.renderAsync(currentDocument, document_container, style_container, docxOptions)
 			.then((x) => {
 				console.log(x);
 			});
@@ -118,7 +118,7 @@
 		const selected = testDocuments.selectedOptions[0].label;
 
 		if (selected) {
-			let resp = await fetch(`../tests/render-test/${selected}/document.docx`);
+			let resp = await fetch(`../tests/fixtures/${selected}.docx`);
 			renderDocx(await resp.blob());
 			fileInput.value = "";
 		}

@@ -1,12 +1,12 @@
 import { WordDocument } from './word-document';
-
 import { DocumentParser } from './document-parser';
-
-// HTML Render Asynchronously
+// HTML renderer, asynchronous (legacy, inherited from docx-preview)
 import { HtmlRenderer } from './html-renderer';
+// HTML renderer, synchronous (pagination-aware)
+import { HtmlRendererSync } from './html-renderer-sync';
 
-// HTML Render Synchronously
-import { HtmlRendererSync } from "./html-renderer-sync";
+/** Accepted input formats for a docx document. */
+export type DocumentSource = Blob | ArrayBuffer | Uint8Array;
 
 export interface Options {
 	breakPages: boolean;                    //enables page breaking on page breaks
@@ -21,7 +21,7 @@ export interface Options {
 
 	inWrapper: boolean;                     //enables rendering of wrapper around document content
 
-	renderChanges: boolean;                 //enables experimental rendering of document changes (inserions/deletions)
+	renderChanges: boolean;                 //enables experimental rendering of document changes (insertions/deletions)
 	renderEndnotes: boolean;                //enables endnotes rendering
 	renderFooters: boolean;                 //enables footers rendering
 	renderFootnotes: boolean;               //enables footnotes rendering
@@ -58,38 +58,46 @@ export const defaultOptions: Options = {
 
 	debug: false,
 	experimental: false,
-}
+};
 
-// Document Parser
-export function parseAsync(data: Blob | any, userOptions: Partial<Options> = null): Promise<any> {
-	// assign defaultOptions
-	const ops = { ...defaultOptions, ...userOptions };
-	// 加载blob对象，根据DocumentParser转换规则，blob对象 => Object对象
+/** Parses a docx file into a WordDocument model without rendering it. */
+export function parseAsync(data: DocumentSource, userOptions: Partial<Options> | null = null): Promise<WordDocument> {
+	const ops: Options = { ...defaultOptions, ...userOptions };
 	return WordDocument.load(data, new DocumentParser(ops), ops);
 }
 
-// Document Render
-export async function renderDocument(document: any, bodyContainer: HTMLElement, styleContainer?: HTMLElement, sync: boolean = true, userOptions?: Partial<Options>): Promise<any> {
-	// assign defaultOptions
-	const ops = { ...defaultOptions, ...userOptions };
-	// HTML渲染器实例
+/** Renders an already-parsed WordDocument into the given containers. */
+export async function renderDocument(
+	document: WordDocument,
+	bodyContainer: HTMLElement,
+	styleContainer?: HTMLElement | null,
+	sync: boolean = true,
+	userOptions?: Partial<Options> | null,
+): Promise<void> {
+	const ops: Options = { ...defaultOptions, ...userOptions };
 	const renderer = sync ? new HtmlRendererSync() : new HtmlRenderer();
-	// Object对象 => HTML标签
-	await renderer.render(document, bodyContainer, styleContainer, ops);
+	await renderer.render(document, bodyContainer, styleContainer ?? undefined, ops);
 }
 
-// Render Synchronously
-export async function renderSync(data: Blob | any, bodyContainer: HTMLElement, styleContainer: HTMLElement = null, userOptions: Partial<Options> = null): Promise<any> {
-	// parse document data
+/** Parses and renders with the synchronous, pagination-aware renderer. */
+export async function renderSync(
+	data: DocumentSource,
+	bodyContainer: HTMLElement,
+	styleContainer: HTMLElement | null = null,
+	userOptions: Partial<Options> | null = null,
+): Promise<WordDocument> {
 	const doc = await parseAsync(data, userOptions);
-	// render document
 	await renderDocument(doc, bodyContainer, styleContainer, true, userOptions);
-
 	return doc;
 }
 
-// Render Asynchronously
-export async function renderAsync(data: Blob | any, bodyContainer: HTMLElement, styleContainer?: HTMLElement, userOptions?: Partial<Options>): Promise<any> {
+/** Parses and renders with the legacy asynchronous renderer. */
+export async function renderAsync(
+	data: DocumentSource,
+	bodyContainer: HTMLElement,
+	styleContainer?: HTMLElement | null,
+	userOptions?: Partial<Options> | null,
+): Promise<WordDocument> {
 	const doc = await parseAsync(data, userOptions);
 	await renderDocument(doc, bodyContainer, styleContainer, false, userOptions);
 	return doc;

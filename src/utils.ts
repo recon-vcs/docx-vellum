@@ -52,21 +52,6 @@ export function blobToBase64(blob: Blob): Promise<string> {
 	});
 }
 
-export function parseCssRules(text: string): Record<string, string> {
-	const result: Record<string, string> = {};
-
-	for (const rule of text.split(';')) {
-		const [key, val] = rule.split(':');
-		result[key] = val;
-	}
-
-	return result
-}
-
-export function formatCssRules(style: Record<string, string>): string {
-	return Object.entries(style).map((k, v) => `${k}: ${v}`).join(';');
-}
-
 // 转化为数组
 export function asArray<T>(val: T | T[]): T[] {
 	return Array.isArray(val) ? val : [val];

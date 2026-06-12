@@ -164,7 +164,8 @@ export class WordDocument {
 
 	async loadFont(id: string, key: string): Promise<string> {
 		const x = await this.loadResource(this.fontTablePart, id, "uint8array");
-		return x ? this.blobToURL(new Blob([deobfuscate(x, key)])) : x;
+		// jszip yields ArrayBuffer-backed views; TS 5.9's BlobPart requires Uint8Array<ArrayBuffer>
+		return x ? this.blobToURL(new Blob([deobfuscate(x, key) as Uint8Array<ArrayBuffer>])) : x;
 	}
 
 	private blobToURL(blob: Blob): string | Promise<string> {

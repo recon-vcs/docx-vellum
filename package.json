@@ -1,20 +1,47 @@
 {
-  "name": "docx-preview-sync",
-  "version": "0.4.20",
+  "name": "docx-vellum",
+  "version": "0.1.0",
+  "description": "Synchronous docx to HTML rendering library for the browser. Fork of docx-preview-sync, evolved for the Recon project.",
   "license": "Apache-2.0",
   "keywords": [
     "word",
-    "docx"
+    "docx",
+    "html",
+    "renderer",
+    "preview"
   ],
   "author": {
-    "name": "millet0328"
+    "name": "recon-vcs"
   },
   "maintainers": [
-    "millet0328"
+    "recon-vcs"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/millet0328/docx-preview-sync.git"
+    "url": "git+https://github.com/recon-vcs/docx-vellum.git"
+  },
+  "type": "module",
+  "main": "./dist/docx-vellum.cjs",
+  "module": "./dist/docx-vellum.mjs",
+  "types": "./dist/docx-vellum.d.ts",
+  "browser": "./dist/docx-vellum.umd.js",
+  "exports": {
+    ".": {
+      "types": "./dist/docx-vellum.d.ts",
+      "import": "./dist/docx-vellum.mjs",
+      "require": "./dist/docx-vellum.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "rollup --config rollup.config.mjs",
+    "watch": "rollup --config rollup.config.mjs --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:browser": "playwright test"
   },
   "dependencies": {
     "jszip": ">=3.0.0",
@@ -22,40 +49,16 @@
     "lodash-es": "^4.17.21"
   },
   "devDependencies": {
-    "@rollup/plugin-run": "^3.0.2",
-    "@rollup/plugin-strip": "^3.0.4",
-    "@rollup/plugin-terser": "^0.4.4",
+    "@playwright/test": "^1.60.0",
     "@rollup/plugin-typescript": "^11.1.6",
     "@types/lodash-es": "^4.17.12",
-    "diff": "^5.0.0",
-    "jasmine-core": "^5.1.0",
-    "karma": "^6.3.9",
-    "karma-chrome-launcher": "^3.1.0",
-    "karma-firefox-launcher": "^2.1.2",
-    "karma-jasmine": "^5.0.0",
+    "jsdom": "^26.0.0",
+    "lodash": "^4.17.21",
     "rollup": "^4.9.5",
+    "rollup-plugin-dts": "^6.1.1",
     "rollup-plugin-node-externals": "^6.1.2",
     "tslib": "^2.4.0",
-    "typescript": "^5.3.3"
-  },
-  "scripts": {
-    "build": "rollup --config rollup.config.mjs",
-    "build-prod": "rollup --config rollup.config.mjs --environment BUILD:production",
-    "watch": "rollup --config rollup.config.mjs --watch",
-    "e2e": "karma start karma.conf.cjs --single-run",
-    "e2e-watch": "karma start karma.conf.cjs"
-  },
-  "files": [
-    "dist"
-  ],
-  "type": "module",
-  "browser": "dist/docx-preview.min.js",
-  "exports": {
-    ".": {
-      "types": "./dist/docx-preview.d.ts",
-      "import": "./dist/docx-preview.esm.min.js"
-    }
-  },
-  "module": "dist/docx-preview.esm.min.js",
-  "types": "dist/docx-preview.d.ts"
+    "typescript": "^5.3.3",
+    "vitest": "^3.0.5"
+  }
 }
