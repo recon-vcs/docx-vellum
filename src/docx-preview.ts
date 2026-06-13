@@ -4,6 +4,8 @@ import { DocumentParser } from './document-parser';
 import { HtmlRenderer } from './html-renderer';
 // HTML renderer, synchronous (pagination-aware)
 import { HtmlRendererSync } from './html-renderer-sync';
+import { createRenderResult, RenderResult } from './render-result';
+export type { AttachOptions, OverlayHandle, OverlayLayer, PageHandle, RenderResult, SourceMap } from './render-result';
 
 /** Accepted input formats for a docx document. */
 export type DocumentSource = Blob | ArrayBuffer | Uint8Array;
@@ -73,10 +75,11 @@ export async function renderDocument(
 	styleContainer?: HTMLElement | null,
 	sync: boolean = true,
 	userOptions?: Partial<Options> | null,
-): Promise<void> {
+): Promise<RenderResult> {
 	const ops: Options = { ...defaultOptions, ...userOptions };
 	const renderer = sync ? new HtmlRendererSync() : new HtmlRenderer();
 	await renderer.render(document, bodyContainer, styleContainer ?? undefined, ops);
+	return createRenderResult(document, bodyContainer, ops.className);
 }
 
 /** Parses and renders with the synchronous, pagination-aware renderer. */
@@ -85,10 +88,9 @@ export async function renderSync(
 	bodyContainer: HTMLElement,
 	styleContainer: HTMLElement | null = null,
 	userOptions: Partial<Options> | null = null,
-): Promise<WordDocument> {
+): Promise<RenderResult> {
 	const doc = await parseAsync(data, userOptions);
-	await renderDocument(doc, bodyContainer, styleContainer, true, userOptions);
-	return doc;
+	return renderDocument(doc, bodyContainer, styleContainer, true, userOptions);
 }
 
 /** Parses and renders with the legacy asynchronous renderer. */
@@ -97,8 +99,7 @@ export async function renderAsync(
 	bodyContainer: HTMLElement,
 	styleContainer?: HTMLElement | null,
 	userOptions?: Partial<Options> | null,
-): Promise<WordDocument> {
+): Promise<RenderResult> {
 	const doc = await parseAsync(data, userOptions);
-	await renderDocument(doc, bodyContainer, styleContainer, false, userOptions);
-	return doc;
+	return renderDocument(doc, bodyContainer, styleContainer, false, userOptions);
 }

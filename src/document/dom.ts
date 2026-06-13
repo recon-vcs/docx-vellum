@@ -115,6 +115,7 @@ export interface OpenXmlElement {
 	className?: string;
 	// 父级元素
 	parent?: OpenXmlElement;
+	sourcePath?: string;
 }
 
 export abstract class OpenXmlElementBase implements OpenXmlElement {
@@ -132,6 +133,7 @@ export abstract class OpenXmlElementBase implements OpenXmlElement {
 	styleName?: string;
 	//class mods
 	className?: string;
+	sourcePath?: string;
 
 	parent?: OpenXmlElement;
 }

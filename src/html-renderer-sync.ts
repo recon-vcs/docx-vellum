@@ -172,6 +172,7 @@ export class HtmlRendererSync {
 		if (document.settingsPart) {
 			this.defaultTabSize = document.settingsPart.settings?.defaultTabStop;
 		}
+		this.assignSourcePaths(document.documentPart.body.children);
 		// 根据option生成wrapper
 		if (this.options.inWrapper) {
 			this.wrapper = this.renderWrapper();
@@ -187,6 +188,35 @@ export class HtmlRendererSync {
 		this.konva_stage.visible(false);
 		// 刷新制表符
 		this.refreshTabStops();
+	}
+
+	assignSourcePaths(children: OpenXmlElement[]) {
+		children.forEach((child, index) => {
+			const path = `body/${index}`;
+			child.sourcePath = path;
+			this.assignNestedSourcePaths(child, path);
+		});
+	}
+
+	assignNestedSourcePaths(element: OpenXmlElement, path: string) {
+		if (element.type === DomType.Table) {
+			element.children?.forEach((row, rowIndex) => {
+				row.children?.forEach((cell, cellIndex) => {
+					const cellPath = `${path}/cell/${rowIndex}/${cellIndex}`;
+					cell.sourcePath = cellPath;
+					cell.children?.forEach((child) => {
+						child.sourcePath = cellPath;
+						this.assignNestedSourcePaths(child, cellPath);
+					});
+				});
+			});
+			return;
+		}
+
+		element.children?.forEach((child) => {
+			child.sourcePath = path;
+			this.assignNestedSourcePaths(child, path);
+		});
 	}
 
 	// 渲染默认样式
@@ -1964,9 +1994,16 @@ export class HtmlRendererSync {
 		// 标记其XML标签名
 		if (oNode && oNode?.nodeType === 1) {
 			oNode.dataset.tag = elem.type;
+			if (elem.sourcePath && this.isSourceAnchor(elem)) {
+				oNode.dataset.vellumPath = elem.sourcePath;
+			}
 		}
 
 		return oNode;
+	}
+
+	isSourceAnchor(elem: OpenXmlElement): boolean {
+		return elem.type === DomType.Paragraph || elem.type === DomType.Table || elem.type === DomType.Cell || elem.type === DomType.SectionBreak;
 	}
 
 	// 根据XML对象渲染子元素，并插入父级元素
