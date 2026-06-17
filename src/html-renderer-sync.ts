@@ -13,6 +13,7 @@ import { parseLineSpacing } from "./document/spacing-between-lines";
 import { Page, PageProps, TreeNode } from './document/page';
 import { RunProperties, WmlRun } from './document/run';
 import { WmlBookmarkStart } from './document/bookmarks';
+import { WmlFieldChar, WmlFieldSimple, WmlInstructionText } from './document/fields';
 import { IDomStyle, Ruleset } from './document/style';
 import { WmlBaseNote, WmlEndnote, WmlEndnotes, WmlFootnote, WmlFootnotes } from './notes/elements';
 import { ThemePart } from './theme/theme-part';
@@ -232,16 +233,20 @@ export class HtmlRendererSync {
             section.${c}>header { position: absolute; top: 0; z-index: 1; display: flex; flex-direction: column; justify-content: flex-end; }
 			section.${c}>article { z-index: 1; }
 			section.${c}>footer { position: absolute; bottom: 0; z-index: 1; }
-			.${c} table { border-collapse: collapse; }
+			.${c} table { border-collapse: collapse; break-inside: avoid; }
 			.${c} table td, .${c} table th { vertical-align: top; }
 			.${c} p { margin: 0pt; min-height: 1em; }
 			.${c} span { white-space: pre-wrap; overflow-wrap: break-word; }
 			.${c} math { vertical-align: middle; }
-			.${c} .${c}-math-paragraph math { display: inline-block; }
+			.${c} .${c}-math-paragraph { break-inside: avoid; }
+			.${c} .${c}-math-paragraph math { display: inline-block; max-width: 100%; }
 			.${c} a { color: inherit; text-decoration: inherit; }
 			.${c} img, ${c} svg { vertical-align: baseline; }
-			.${c} svg { fill: transparent; }
+			.${c} svg { fill: transparent; break-inside: avoid; }
 			.${c} .clearfix::after { content: ""; display: block; line-height: 0; clear: both; }
+			.${c} br.break.column { break-after: column; }
+			.${c} s.break.section { display: block; }
+			.${c} s.break.section[data-type="nextColumn"] { break-before: column; }
 		`;
 
 		return createStyleElement(styleText);
@@ -869,12 +874,19 @@ export class HtmlRendererSync {
 			if (el.type === DomType.SectionBreak) {
 				let type = (el as WmlSectionBreak).break;
 				switch (type) {
-					// Continuous Section Break.
+					// Continuous Section Break: stays on the same page by design
+					// (no startNewPage()). Known limitation: the new section's own
+					// pgSz/cols/margins still aren't applied mid-page since a page
+					// currently carries a single SectionProperties; that needs the
+					// multi-section-per-page layout model, not a local fix here.
 					case SectionType.Continuous:
 
 						break;
 
-					// Column Section Break.
+					// Column Section Break: also stays on the same page. The
+					// column-advance itself is handled in CSS via
+					// `s.break.section[data-type="nextColumn"] { break-before: column; }`
+					// (see renderDefaultStyle), not here.
 					case SectionType.NextColumn:
 
 						break;
@@ -1682,6 +1694,16 @@ export class HtmlRendererSync {
 				oNode = await this.renderRun(elem as WmlRun, parent as HTMLElement);
 				break;
 
+			case DomType.SimpleField:
+				// container has no visual representation of its own; its
+				// resolved Run(s) are appended directly to parent.
+				await this.renderElements(
+					this.resolveSimpleField(elem as WmlFieldSimple),
+					parent as HTMLElement
+				);
+				oNode = null;
+				break;
+
 			case DomType.Text:
 				oNode = await this.renderText(elem as WmlText, parent as HTMLElement);
 				break;
@@ -2081,9 +2103,117 @@ export class HtmlRendererSync {
 		}
 	}
 
+	// Evaluates PAGE/NUMPAGES field codes in-place. Word stores these as a
+	// `w:fldChar begin` Run, one or more `w:instrText` Runs holding the field
+	// code (e.g. "PAGE \* MERGEFORMAT"), a `w:fldChar separate` Run, the
+	// last-saved cached result Run(s), then a `w:fldChar end` Run — all
+	// sibling Runs in the same paragraph. renderRun already hides the
+	// structural begin/instrText/separate/end Runs (elem.fieldRun), but the
+	// cached result Run was left untouched, so footers kept showing whatever
+	// page number Word had last saved instead of the page actually rendered.
+	// Field codes other than PAGE/NUMPAGES are left as Word's cached value.
+	resolveFieldRuns(runs: OpenXmlElement[]): OpenXmlElement[] {
+		const pages = this.document.documentPart.body.pages ?? [];
+		const pageNumber = pages.findIndex(p => p.pageId === this.currentPage.pageId) + 1;
+		const totalPages = pages.length;
+		const result: OpenXmlElement[] = [];
+		let i = 0;
+
+		while (i < runs.length) {
+			const run = runs[i] as WmlRun;
+			const beginChar = run.type === DomType.Run
+				&& run.children?.find(c => c.type === DomType.ComplexField) as WmlFieldChar;
+
+			if (!beginChar || beginChar.charType !== 'begin') {
+				result.push(run);
+				i++;
+				continue;
+			}
+			// collect the instruction text up to (and including) `separate`
+			let j = i + 1;
+			let instruction = '';
+			while (j < runs.length) {
+				const childRun = runs[j] as WmlRun;
+				const fieldChar = childRun.children?.find(c => c.type === DomType.ComplexField) as WmlFieldChar;
+				const instr = childRun.children?.find(c => c.type === DomType.Instruction) as WmlInstructionText;
+				if (instr) {
+					instruction += instr.text;
+				}
+				j++;
+				if (fieldChar?.charType === 'separate') {
+					break;
+				}
+			}
+			// the cached result Runs start here; scan ahead for `end`
+			const resultStart = j;
+			while (j < runs.length) {
+				const fieldChar = (runs[j] as WmlRun).children?.find(c => c.type === DomType.ComplexField) as WmlFieldChar;
+				if (fieldChar?.charType === 'end') {
+					break;
+				}
+				j++;
+			}
+			const endIndex = j;
+			const fieldName = instruction.trim().split(/\s+/)[0]?.toUpperCase();
+
+			if (fieldName === 'PAGE' || fieldName === 'NUMPAGES') {
+				const value = String(fieldName === 'PAGE' ? pageNumber : totalPages);
+				const template = (runs[resultStart] as WmlRun) ?? run;
+				// shallow-copy style only; cloneDeep would also walk
+				// `.parent` and drag in the whole ancestor tree (Paragraph,
+				// Body, ...) since OpenXmlElement is a parent<->children cycle.
+				const replacement: WmlRun = {
+					type: DomType.Run,
+					cssStyle: { ...template.cssStyle },
+					verticalAlign: template.verticalAlign,
+					parent: run.parent,
+					fieldRun: false,
+					children: [{ type: DomType.Text, text: value, children: [{ type: DomType.Character, char: value } as WmlCharacter] } as WmlText],
+				} as WmlRun;
+				this.processElement(replacement);
+				result.push(replacement);
+			} else {
+				// unsupported field code (DATE, REF, TOC, ...): keep as-is
+				result.push(...runs.slice(i, endIndex + 1));
+			}
+			i = endIndex + 1;
+		}
+
+		return result;
+	}
+
+	// `w:fldSimple` carries the field code directly in `instr` and nests its
+	// cached display Run(s) as children. Same PAGE/NUMPAGES-only scope as
+	// resolveFieldRuns above.
+	resolveSimpleField(elem: WmlFieldSimple): OpenXmlElement[] {
+		const pages = this.document.documentPart.body.pages ?? [];
+		const pageNumber = pages.findIndex(p => p.pageId === this.currentPage.pageId) + 1;
+		const totalPages = pages.length;
+		const fieldName = elem.instruction?.trim().split(/\s+/)[0]?.toUpperCase();
+
+		if (fieldName !== 'PAGE' && fieldName !== 'NUMPAGES') {
+			return elem.children ?? [];
+		}
+
+		const value = String(fieldName === 'PAGE' ? pageNumber : totalPages);
+		const template = (elem.children?.[0] as WmlRun);
+		const replacement: WmlRun = {
+			type: DomType.Run,
+			cssStyle: { ...template?.cssStyle },
+			verticalAlign: template?.verticalAlign,
+			parent: elem.parent,
+			fieldRun: false,
+			children: [{ type: DomType.Text, text: value, children: [{ type: DomType.Character, char: value } as WmlCharacter] } as WmlText],
+		} as WmlRun;
+		this.processElement(replacement);
+		return [replacement];
+	}
+
 	async renderParagraph(elem: WmlParagraph, parent: HTMLElement) {
 		// 创建段落元素
 		const oParagraph = createElement('p');
+		// PAGE/NUMPAGES等域代码求值，替换缓存的旧值
+		elem.children = this.resolveFieldRuns(elem.children);
 		// 生成段落的uuid标识，
 		oParagraph.dataset.uuid = elem.uuid;
 		// 渲染class
