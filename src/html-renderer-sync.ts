@@ -2528,11 +2528,9 @@ export class HtmlRendererSync {
 
 		tabSpan.innerHTML = '&nbsp;';
 
-		if (this.options.experimental) {
-			tabSpan.className = this.tabStopClass();
-			const stops = findParent<WmlParagraph>(elem, DomType.Paragraph).props?.tabs;
-			this.currentTabs.push({ stops, span: tabSpan });
-		}
+		tabSpan.className = this.tabStopClass();
+		const stops = findParent<WmlParagraph>(elem, DomType.Paragraph).props?.tabs;
+		this.currentTabs.push({ stops, span: tabSpan });
 
 		// 作为子元素插入，执行溢出检测
 		if (parent) {
@@ -2690,28 +2688,16 @@ export class HtmlRendererSync {
 
 	// 注释开始
 	renderCommentRangeStart(commentStart: WmlCommentRangeStart) {
-		if (!this.options.experimental) {
-			return null;
-		}
-
 		return document.createComment(`start of comment #${commentStart.id}`);
 	}
 
 	// 注释结束
 	renderCommentRangeEnd(commentEnd: WmlCommentRangeStart) {
-		if (!this.options.experimental) {
-			return null;
-		}
-
 		return document.createComment(`end of comment #${commentEnd.id}`);
 	}
 
 	// 注释
 	renderCommentReference(commentRef: WmlCommentReference) {
-		if (!this.options.experimental) {
-			return null;
-		}
-
 		const comment = this.document.commentsPart?.commentMap[commentRef.id];
 
 		if (!comment) return null;
@@ -2989,9 +2975,6 @@ export class HtmlRendererSync {
 
 	// 刷新tab制表符
 	refreshTabStops() {
-		if (!this.options.experimental) {
-			return;
-		}
 		for (const tab of this.currentTabs) {
 			updateTabStop(tab.span, tab.stops, this.defaultTabSize, this.pointToPixelRatio);
 		}

@@ -1,8 +1,6 @@
 import { WordDocument } from './word-document';
 import { DocumentParser } from './document-parser';
-// HTML renderer, asynchronous (legacy, inherited from docx-preview)
-import { HtmlRenderer } from './html-renderer';
-// HTML renderer, synchronous (pagination-aware)
+// HTML renderer, pagination-aware
 import { HtmlRendererSync } from './html-renderer-sync';
 import { createRenderResult, RenderResult } from './render-result';
 export type { AttachOptions, OverlayHandle, OverlayLayer, PageHandle, RenderResult, SourceMap } from './render-result';
@@ -33,7 +31,6 @@ export interface Options {
 	useBase64URL: boolean;                  //if true, images, fonts, etc. will be converted to base 64 URL, otherwise URL.createObjectURL is used
 
 	debug: boolean;                         //enables additional logging
-	experimental: boolean;                  //enables experimental features (tab stops calculation)
 }
 
 export const defaultOptions: Options = {
@@ -59,7 +56,6 @@ export const defaultOptions: Options = {
 	useBase64URL: false,
 
 	debug: false,
-	experimental: false,
 };
 
 /** Parses a docx file into a WordDocument model without rendering it. */
@@ -73,16 +69,15 @@ export async function renderDocument(
 	document: WordDocument,
 	bodyContainer: HTMLElement,
 	styleContainer?: HTMLElement | null,
-	sync: boolean = true,
 	userOptions?: Partial<Options> | null,
 ): Promise<RenderResult> {
 	const ops: Options = { ...defaultOptions, ...userOptions };
-	const renderer = sync ? new HtmlRendererSync() : new HtmlRenderer();
+	const renderer = new HtmlRendererSync();
 	await renderer.render(document, bodyContainer, styleContainer ?? undefined, ops);
 	return createRenderResult(document, bodyContainer, ops.className);
 }
 
-/** Parses and renders with the synchronous, pagination-aware renderer. */
+/** Parses and renders with the pagination-aware renderer. */
 export async function renderSync(
 	data: DocumentSource,
 	bodyContainer: HTMLElement,
@@ -90,16 +85,5 @@ export async function renderSync(
 	userOptions: Partial<Options> | null = null,
 ): Promise<RenderResult> {
 	const doc = await parseAsync(data, userOptions);
-	return renderDocument(doc, bodyContainer, styleContainer, true, userOptions);
-}
-
-/** Parses and renders with the legacy asynchronous renderer. */
-export async function renderAsync(
-	data: DocumentSource,
-	bodyContainer: HTMLElement,
-	styleContainer?: HTMLElement | null,
-	userOptions?: Partial<Options> | null,
-): Promise<RenderResult> {
-	const doc = await parseAsync(data, userOptions);
-	return renderDocument(doc, bodyContainer, styleContainer, false, userOptions);
+	return renderDocument(doc, bodyContainer, styleContainer, userOptions);
 }
