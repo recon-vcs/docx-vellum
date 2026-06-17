@@ -22,11 +22,13 @@ DrawingML/VMLは別実装(`document-parser.ts`内のDrawingML解析、`src/vml/v
 
 ## 2. 問題ごと根本原因
 
-### 2-1. 数式(OMML)崩れ・無駄な改行
+### 2-1. 数式(OMML)崩れ・無駄な改行 ── セクション/カラムレイアウト起因が濃厚(フォント・色は無関係)
 
-- パース: `document-parser.ts` mmlTagMap(L27-52)で oMath系13要素対応。`parseMathProperties`(L1060-1101)は属性6種(chr/vertJc/jc/pos/degHide/begChr/endChr)のみ対応。色・フォント・サイズ等のOOXML数式属性は無視。
-- レンダリング: `html-renderer-sync.ts` L1838-2005, 2053-2967でMathML(`<math>`/`<mfrac>`/`<msup>`/`<msub>`等)へ直接変換。KaTeX/MathJax等の組版エンジン未使用、ブラウザ標準MathML実装に委譲。
-- 根本原因: ブラウザ間MathML実装差異 + 属性未対応により Word本来のフォントサイズ・配置比率が再現されない。「無駄な改行」はoMathParaのブロック要素マージン処理、もしくはMathML `<mrow>` の折り返し制御(white-space/display値)未設定が濃厚。要再現テストでの特定。
+`document.xml`実測: 問題の数式2ブロック(`m:oMathPara` L1928, L1983)はいずれも**セクション3内**(L1377 sectPrより後、L2353 sectPrより前)に配置されている。セクション3は`<w:cols w:num="2"/>`(2カラムレイアウト)。つまり数式はCSS `column-count: 2`で組まれた狭いカラム幅の中に押し込まれている。フォント/色/属性の問題ではなく、**カラム幅に対して数式ブロックが大きすぎることによる強制折り返し・分断**が第一の疑い。
+
+- カラム実装: `html-renderer-sync.ts` `createPageContent`(L1244-1266)で`columnCount`/`columnGap`/`columnFill:auto`をCSSに設定。コメントL1242に開発者自身の TODO「分栏：一个页面可能存在多个章节section，每个section拥有不同的分栏」(1ページ内に複数セクションが存在し各セクションが異なるカラム数を持つケース未対応)と明記。本サンプルはセクション単位でカラム数が変わる(セクション1: 単カラム / セクション2,3: 2カラム)構成であり、この既知の弱点に直撃する可能性が高い。
+- CSS Multicolの既定動作は「ブロック要素はカラム境界で分割されうる」。MathML `<math>`/`<mfrac>`等のコンテナに`break-inside: avoid`相当の指定が無ければ、数式がカラム境界やカラム幅で意図せず分割・圧縮される。これが「無駄な改行」の直接原因として最有力。
+- 数式パース・属性カバレッジの不足(`parseMathProperties` L1060-1101が6属性のみ対応、色/フォント/サイズ未対応)も実在する制約だが、見た目崩れの主因ではなく、二次的な精度劣化要因として扱う。
 
 ### 2-2. 図形が弱い・複雑図形が単純楕円化
 
@@ -47,15 +49,24 @@ DrawingML/VMLは別実装(`document-parser.ts`内のDrawingML解析、`src/vml/v
 
 - `src/document/section.ts`: `w:sectPr`の`pgSz`/`pgMar`/`cols`/`headerReference`/`footerReference`パースは実装済み(L109-266)。`contentSize.height`は計算されておらず「ヘッダーフッターDOM確定後に再計算」とコメントのみ(L261-263)。
 - `html-renderer-sync.ts` L1036-1047: ヘッダー/フッター未指定セクションへの継承ロジックは実装済み(`_.unionBy`で直前セクションのrefsとマージ)。継承自体は対症療法ではなく構造的に対応されている。
-- カラム数切替(`w:cols num=2`)はL1247で対応コードあるが、本サンプルのような「セクション単位で単カラム→2カラムへ切替わる」ケースの実機検証記録が見当たらない(golden testでの複数セクション+カラム切替の網羅性不明)。
+- SectionBreak自体の改ページ処理は実装あり(`splitElementsBySymbol`内 L868-894): `NextPage`/`EvenPage`/`OddPage`/defaultで`startNewPage()`を呼ぶ。だが**`Continuous`と`NextColumn`のcaseは空(no-op、L873-880)で未実装**。本サンプルは全sectPrに`w:type`指定が無くデフォルト`NextPage`扱いのため直接は発火しないが、type指定付きの文書(continuous断面やカラム内改段)では区切りが無視されるバグが確定的に存在する。
+- カラム数切替(`w:cols num=2`)はL1247で対応コードあるが、`createPageContent`のコメントL1242で「1ページに複数セクションが混在し、各セクションが異なるカラム数を持つケースは未対応」と開発者自身が明記。本サンプルはまさにセクション単位でカラム数が変わる構成(2-1参照)であり、この欠落の影響を受ける本命候補。
 - 改ページ: `splitPageBySymbol`(L670-)は`w:lastRenderedPageBreak`(Word保存時点の静的記録)を基準に粗い分割。テーブル/TOC含むページのみ`isSplit=false`にして実測オーバーフロー再検出(`Overflow` enum、L1180-1191)の対象にする設計。通常の段落+画像のみのページは静的マーカー位置をそのまま信用。
-- 根本原因: 画像が新規挿入/差し替えされた場合、Word保存時点の`lastRenderedPageBreak`位置と実際の高さが食い違う。動的overflow検出機構自体は存在するが、適用対象がテーブル/TOCに限定されており、画像主体ページでは機能しない設計上の穴。
+- 根本原因: (a)画像が新規挿入/差し替えされた場合、Word保存時点の`lastRenderedPageBreak`位置と実際の高さが食い違う。動的overflow検出機構自体は存在するが、適用対象がテーブル/TOCに限定されており画像主体ページでは機能しない。(b)Continuous/NextColumn未実装、(c)1ページ内複数セクション・複数カラム未対応、の3点が複合してセクション境界の改ページ・改カラムが意図通りに発生しない事例を生む。
 
-### 2-5. ヘッダー/フッター
+### 2-5. ヘッダー/フッター ── 開発者自身がバグを認めている既知制約
 
-- `renderHeaderFooterRef`(L1271-)で first/even/default解決、高さ実測(`getOffsetHeight`)してpadding-top/bottomへ反映(L1148-1174)するロジックは実装済みで設計として妥当。
+- `renderHeaderFooterRef`(L1271-)で first/even/default解決、高さ実測(`getOffsetHeight`)してpadding-top/bottomへ反映(L1148-1174)するロジック自体は存在する。
+- だが`createPageContent`直前のコメント(L1268-1269)に**開発者自身のTODOが明記**: 「分页不准确，页脚页码混乱」(ページ分割が不正確、フッターのページ番号が混乱する)、「支持奇数页偶数页不同页眉页脚」(奇数/偶数ページで異なるヘッダーフッターは未対応、の意の未完了TODO)。
+- 本サンプルはheaderReference/footerReferenceに`even`/`default`/`first`の3種類全てを使用しており、このTODOが直撃する構成。「実装済みだから動くはず」ではなく、**実装はあるが既知バグとして公言されている状態**と認識すべき。
 - `src/header-footer/parts.ts`(36行)はパート読み込みのみの薄い層、ロジックはhtml-renderer-sync側に集約。
-- 機能自体は実装済み。優先度は「動かない」ではなく「3セクション×3種別の組合せを回帰テストで保証していない」点。
+
+### 2-6. 行間設定の微妙なズレ ── docGrid補正がlineRule次第で適用漏れ
+
+`src/document/spacing-between-lines.ts`に2つの確定済み欠陥:
+
+- L71 開発者コメント「TODO 处理AtLeast，行高不准确」(AtLeastルールの行高処理が不正確、と明記)。`atLeast`時は`calc(100% + Xpt)`という近似式(L121-123)で、Wordの実際のベースライン計算と一致する保証がない。
+- L142-158: 本サンプルの全sectPrには`<w:docGrid w:type="lines" w:linePitch="360"/>`が指定されている(実測確認済み)。このdocGrid補正は`lineSpacing['line-height']`が**数値型の場合のみ**(L148 `typeof === 'number'`)適用される。だが`lineRule="exact"`または`"atLeast"`の段落では、L122/L127で`line-height`が**既に文字列**(`calc(...)`や`"Xpt"`)にセットされているため、L148の条件に掛からず**docGrid補正がスキップされる**。lineRule次第で行間計算経路が分岐し、グリッド指定文書で見た目が揃わない不整合が生じる。
 
 ## 3. 設計方針
 
@@ -67,7 +78,17 @@ DrawingML/VMLは別実装(`document-parser.ts`内のDrawingML解析、`src/vml/v
 
 ## 4. 再設計案
 
-### 4-1. 図形ジオメトリ統一エンジン(優先度最高、視覚インパクト最大)
+### 4-0. セクション/カラム/ページネーション統合エンジン(優先度最高、複数不具合の共通根)
+
+2-1・2-4・2-5・2-6で確認した不具合は「1セクション=1ページ」という暗黙の前提と、ページ分割ロジックの未実装ケース(Continuous/NextColumn)・既知バグ(ヘッダーフッター混乱、docGrid補正漏れ)に共通の根を持つ。個別パッチでなく以下を一体で再設計する。
+
+- `createPageContent`のTODO(L1242)を解消: セクション境界をページ内のサブ領域として扱えるレイアウトモデルへ変更し、1ページ内でカラム数が変わるセクション構成(Continuous断面)を表現できるようにする。
+- `splitElementsBySymbol`のSectionBreak switch(L868-894)で空実装のままの`Continuous`/`NextColumn`ケースを実装する。
+- カラムレイアウト内のブロック要素(数式・図形・表)に`break-inside: avoid`相当の制御を導入し、カラム幅を超える・カラム境界で分割されるべきでない要素を保護する。数式の「無駄な改行」はここで解消を狙う。
+- ヘッダー/フッターのfirst/even/default解決とページ番号付与(L1268-1269のTODO)をセクション統合エンジンの一部として再実装し、テスト可能な単位に切り出す。
+- `parseLineSpacing`(spacing-between-lines.ts)のdocGrid補正をlineRule(`auto`/`exact`/`atLeast`)全パターンに対して一貫した経路で適用するよう修正し、AtLeastの近似式(L121-123)をWordのベースライン計算に近づける。
+
+### 4-1. 図形ジオメトリ統一エンジン(視覚インパクト最大)
 
 - 新設: `ShapeGeometryIR { kind, basePaths: PathCommand[], adjustables: Record<string, GuideFormula> }` という中間表現を定義。
 - ECMA-376 Part 1 §20.1.9.x の `prstGeom` 調整可能数式(`gd`/`avLst`)を解釈する計算エンジンを実装(主要十数種から段階導入、noSmoking含む)。
@@ -75,31 +96,34 @@ DrawingML/VMLは別実装(`document-parser.ts`内のDrawingML解析、`src/vml/v
 - DrawingML(`wps:wsp`)とVML(`v:shape`)を同じIRへ変換するアダプタを書き、レンダラ(SVG生成)を1本に統合。VML専用のcustGeom/グループ/回転対応もこのIR層で吸収する。
 - 効果: noSmoking等の複合図形が正しい形状・正しいテーマ色で再現される。新規プリセット追加が「パス文字列のハードコード追加」でなく「公式数式の登録」になり拡張性が上がる。
 
-### 4-2. レイアウト計測の二段化(ページネーション/改ページ信頼性)
+### 4-2. 画像・lastRenderedPageBreakのオーバーフロー検出拡張
 
 - 全要素(段落・画像・図形・テーブル)を`isSplit=false`相当の動的オーバーフロー検出対象に統一する。`lastRenderedPageBreak`は「初期分割ヒント」のレイヤーに格下げし、レンダリング後に実測offsetHeightで再検証・補正するフックを追加。
 - 画像はCSS固定サイズ(EMU変換済み)のため計測自体は安定済み。問題は「検出ロジックの適用範囲」であり画像変換コード自体の修正は不要。
-- 効果: 画像追加・差し替え時にWord保存時点の記録とズレてもページ境界が崩れない。
+- 効果: 画像追加・差し替え時にWord保存時点の記録とズレてもページ境界が崩れない。4-0のセクション統合エンジンと組み合わせて初めて、セクション境界+画像オーバーフローの複合崩れが解消する。
 
-### 4-3. 数式属性カバレッジ拡大+改行原因の特定修正
+### 4-3. 数式属性カバレッジ拡大(二次的精度向上)
+
+「無駄な改行」自体の主因はカラムレイアウト未対応(2-1, 4-0で対応)。本項はその後に残る精度差分の話。
 
 - `parseMathProperties`の対応属性をOOXML仕様の主要プロパティ(色/フォント/サイズ/太字italic/上下添字スケール比)まで拡張。
-- MathML出力側のCSS強化(`display: inline-flex`相当の折り返し制御、`mfrac`/`munderover`の行間調整)。「無駄な改行」は再現テストケースを切り出し、`oMathPara`のブロックmargin処理かMathML要素のwhite-space設定かを確定後に修正。
+- MathML出力側のCSS強化(`mfrac`/`munderover`の行間調整)。4-0でカラム起因の折り返しを解消した後、残る微細なズレをここで詰める。
 
 ### 4-4. テキストボックス独立サイズ対応
 
 - `wps:txbx`に親Shape依存のwidth:100%だけでなく、`a:xfrm`があれば自身のEMUサイズを優先する分岐を追加。回転変形時は`parseTransform2D`計算後の実寸を反映。
 
-### 4-5. セクション/ヘッダーフッター回帰保証
+### 4-5. 回帰テスト整備
 
-- 機能自体は実装済みのため新規実装は最小限。`tests/golden`に「3セクション・カラム数混在・header even/default/first混在」のケースを追加し、退行検出を仕組み化する。
+- `tests/golden`に「3セクション・カラム数混在・header even/default/first混在・docGrid lines指定」のケース(本サンプル相当)を追加し、4-0で修正した内容の退行を検出できるようにする。
 
 ## 5. 実装フェーズ
 
-1. **Phase 0 計測基盤**: golden image diffテストにサンプル(zz-sample-analyze.docx)由来のケースを追加(図形/数式/セクション境界/画像混在ページ)。先にテストを赤くしてから着手。
-2. **Phase 1 図形ジオメトリ統一エンジン**(4-1): 最大の見た目インパクト。DrawingML/VML共通IR化、FillResolver実装、主要プリセットの公式数式対応。
-3. **Phase 2 レイアウト二段化**(4-2): 動的オーバーフロー検出を全要素に拡張、lastRenderedPageBreakをヒント層へ格下げ。
-4. **Phase 3 数式属性拡張+改行修正**(4-3): 再現ケース確定後にCSS/属性対応。
-5. **Phase 4 テキストボックス/セクション仕上げ**(4-4, 4-5): 回帰テスト整備、残課題クローズ。
+1. **Phase 0 計測基盤**: golden image diffテストにサンプル(zz-sample-analyze.docx)由来のケースを追加(セクション境界/カラム混在/数式/図形/ヘッダーフッター混在)。先にテストを赤くしてから着手。
+2. **Phase 1 セクション/カラム/ページネーション統合エンジン**(4-0): 数式の「無駄な改行」・セクション区切りの改ページ漏れ・ヘッダーフッター混乱・行間ズレ、4つの不具合の共通根を一体で解消する最優先フェーズ。
+3. **Phase 2 図形ジオメトリ統一エンジン**(4-1): 視覚インパクト最大の図形崩れに着手。DrawingML/VML共通IR化、FillResolver実装、主要プリセットの公式数式対応。
+4. **Phase 3 オーバーフロー検出拡張**(4-2): 画像主体ページの動的検出をPhase 1の上に積む。
+5. **Phase 4 数式属性拡張+テキストボックス仕上げ**(4-3, 4-4): 残る精度差分を詰める。
+6. **Phase 5 回帰テスト整備**(4-5): 各フェーズの修正を恒久的に固定する。
 
 各フェーズ完了条件: 該当golden testが通り、`zz-sample-analyze.docx`のレンダリング結果がWord出力(比較画像)と視覚的に一致すること。
