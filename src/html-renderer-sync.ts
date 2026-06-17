@@ -1249,6 +1249,11 @@ export class HtmlRendererSync {
 			if (count > 1) {
 				oArticle.style.columnCount = `${count}`;
 				oArticle.style.columnGap = space;
+				// Word fills a column top-to-bottom before overflowing into the
+				// next one; the CSS default (`balance`) instead spreads content
+				// evenly across columns, squashing tables/shapes into the wrong
+				// column. `auto` matches Word's sequential-fill behavior.
+				oArticle.style.columnFill = 'auto';
 			}
 			// 分隔符，则添加分割线样式
 			if (separator) {
