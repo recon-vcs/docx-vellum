@@ -20,6 +20,7 @@ import { BaseHeaderFooterPart } from './header-footer/parts';
 import { Part } from './common/part';
 import { VmlElement } from './vml/vml';
 import { WmlCommentRangeStart, WmlCommentReference } from './comments/elements';
+import { getPresetGeometryPaths } from './shapes/preset-geometry';
 import Konva from 'konva';
 import type { Stage } from 'konva/lib/Stage';
 import type { Layer } from 'konva/lib/Layer';
@@ -1713,6 +1714,10 @@ export class HtmlRendererSync {
 				oNode = await this.renderImage(elem as WmlImage, parent as HTMLElement);
 				break;
 
+			case DomType.Shape:
+				oNode = await this.renderShape(elem, parent as HTMLElement);
+				break;
+
 			case DomType.BookmarkStart:
 				oNode = this.renderBookmarkStart(elem as WmlBookmarkStart, parent as HTMLElement);
 				break;
@@ -2422,6 +2427,66 @@ export class HtmlRendererSync {
 		oImage.dataset.overflow = await this.appendChildren(parent, oImage);
 
 		return oImage;
+	}
+
+	// 渲染DrawingML图形（预制几何形状，如矩形、箭头、"禁止"标记等）
+	async renderShape(elem: OpenXmlElement, parent: HTMLElement) {
+		const oContainer = createElement('span');
+		oContainer.style.position = 'relative';
+		oContainer.style.display = 'inline-block';
+		this.renderStyleValues(elem.cssStyle, oContainer);
+
+		const oSvg = createSvgElement('svg');
+		oSvg.setAttribute('viewBox', '0 0 21600 21600');
+		oSvg.setAttribute('preserveAspectRatio', 'none');
+		oSvg.style.position = 'absolute';
+		oSvg.style.inset = '0';
+		oSvg.style.width = '100%';
+		oSvg.style.height = '100%';
+		oSvg.style.overflow = 'visible';
+
+		// Word resolves unset fill/line from the shape's theme style reference
+		// (`wps:style`/`a:fillRef`/`a:lnRef`), which we don't parse. Falling back
+		// to "no fill, black outline" at least keeps the shape visible instead
+		// of disappearing (e.g. a white-on-white fill).
+		const fill: string = elem.props?.fill ?? 'none';
+		const line: { width?: string; color?: string } = elem.props?.line ?? {};
+		const strokeColor = line.color ?? '#000000';
+		const strokeWidth = line.width ? (parseFloat(line.width) || 1) : 1;
+
+		for (const d of getPresetGeometryPaths(elem.props?.preset)) {
+			const oPath = createSvgElement('path');
+			oPath.setAttribute('d', d);
+			oPath.setAttribute('fill-rule', 'evenodd');
+			oPath.setAttribute('fill', fill);
+			oPath.setAttribute('stroke', strokeColor);
+			oPath.setAttribute('stroke-width', `${strokeWidth}`);
+			// `d` is in the 21600x21600 viewBox space, so a stroke-width of e.g.
+			// "1" would render at a fraction of a pixel once scaled down to the
+			// shape's real size. non-scaling-stroke keeps it in real CSS pixels.
+			oPath.setAttribute('vector-effect', 'non-scaling-stroke');
+			oSvg.appendChild(oPath);
+		}
+
+		oContainer.appendChild(oSvg);
+		// 作为子元素插入，执行溢出检测
+		const is_overflow = await this.appendChildren(parent, oContainer);
+
+		// 形状内文本（txbx），叠加在SVG之上，使用普通CSS像素单位，不随viewBox缩放
+		if (elem.children?.length) {
+			const oText = createElement('div');
+			oText.style.position = 'relative';
+			oText.style.width = '100%';
+			oText.style.height = '100%';
+			oText.style.display = 'flex';
+			oText.style.alignItems = 'center';
+			oText.style.justifyContent = 'center';
+			oContainer.appendChild(oText);
+			await this.renderChildren(elem, oText);
+		}
+
+		oContainer.dataset.overflow = is_overflow;
+		return oContainer;
 	}
 
 	// 生成Konva框架--元素

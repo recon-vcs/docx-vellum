@@ -20,9 +20,8 @@ export var autos = {
 	highlight: "transparent"
 };
 
-// TODO 支持的命名空间：wps、wpi
 const supportedNamespaceURIs = [
-	// "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+	"http://schemas.microsoft.com/office/word/2010/wordprocessingShape",
 ];
 
 const mmlTagMap = {
@@ -1616,24 +1615,43 @@ export class DocumentParser {
 	}
 
 	// 解析图形shape
-	parseShape(node: Element) {
-		let shape: OpenXmlElement = { type: DomType.Shape, cssStyle: {} }
-		// TODO 预制图形
+	parseShape(node: Element): OpenXmlElement {
+		let shape: OpenXmlElement = {
+			type: DomType.Shape,
+			cssStyle: {},
+			children: [],
+			props: {
+				is_transform: false,
+				transform: {},
+			},
+		};
+
 		for (let n of xml.elements(node)) {
 			switch (n.localName) {
+				// 图形属性
+				case "spPr":
+					this.parseShapeProperties(n, shape);
+					break;
+
+				// 形状中的文本正文
+				case "txbx":
+				case "linkedTxbx": {
+					let txbxContent = xml.element(n, "txbxContent");
+					if (txbxContent) {
+						shape.children.push(...this.parseBodyElements(txbxContent));
+					}
+					break;
+				}
+
+				// 非几何信息，渲染不需要
 				case "cNvPr":
 				case "cNvSpPr":
 				case "cNvCnPr":
-				// 图形属性
-				case "spPr":
-					return this.parseShapeProperties(n, shape);
 				// 图形样式
 				case "style":
-
-				case "txbx":
-				case "linkedTxbx":
 				// 指定形状中文本正文的正文属性。
 				case "bodyPr":
+					break;
 
 				default:
 					if (this.options.debug) {
@@ -1641,7 +1659,7 @@ export class DocumentParser {
 					}
 			}
 		}
-		return null;
+		return shape;
 	}
 
 	// 图形属性
@@ -1672,27 +1690,67 @@ export class DocumentParser {
 					// 子元素
 					this.parseTransform2D(n, target);
 					break;
-				case "custGeom":
+
+				// 预制图形（矩形、椭圆、箭头等）
 				case "prstGeom":
+					target.props.preset = xml.attr(n, "prst");
+					break;
+
+				// 自定义路径图形，几何路径暂不支持，仅标记为自定义
+				case "custGeom":
+					target.props.preset = "custom";
+					break;
+
 				case "noFill":
+					target.props.fill = "none";
+					break;
+
 				case "solidFill":
+					target.props.fill = this.parseSolidFillColor(n);
+					break;
+
+				// 边框/线条
+				case "ln":
+					target.props.line = this.parseShapeLine(n);
+					break;
+
 				case "gradFill":
 				case "blipFill":
 				case "pattFill":
 				case "grpFill":
-				case "ln":
 				case "effectLst":
 				case "effectDag":
 				case "scene3d":
 				case "sp3d":
 				case "extLst":
+					break;
+
 				default:
 					if (this.options.debug) {
 						console.warn(`DOCX:%c Unknown Shape Property：${n.localName}`, 'color:#f75607');
 					}
 			}
 		}
-		return null;
+	}
+
+	// 单色填充，仅支持直接RGB值；主题色（schemeClr）解析复杂，暂不支持
+	parseSolidFillColor(node: Element): string | null {
+		let srgbClr = xml.element(node, "srgbClr");
+		return srgbClr ? `#${xml.attr(srgbClr, "val")}` : null;
+	}
+
+	// 图形线条（边框）
+	parseShapeLine(node: Element): { width?: string; color?: string } {
+		let result: { width?: string; color?: string } = {};
+		let width = xml.intAttr(node, "w", 0);
+		if (width) {
+			result.width = String(convertLength(width, LengthUsage.Emu));
+		}
+		let fill = xml.element(node, "solidFill");
+		if (fill) {
+			result.color = this.parseSolidFillColor(fill);
+		}
+		return result;
 	}
 
 	// 解析图片
