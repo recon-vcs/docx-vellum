@@ -10,7 +10,7 @@ import { FooterHeaderReference, SectionProperties } from '@docx/ooxml/wordproces
 import { Page, PageProps } from '@docx/rendering/pagination/model/page';
 import { WmlFieldSimple } from '@docx/ooxml/wordprocessingml/document/model/fields';
 import { IDomStyle } from '@docx/ooxml/wordprocessingml/document/model/style';
-import { WmlBaseNote, WmlEndnote, WmlEndnotes, WmlFootnote, WmlFootnotes } from '@docx/ooxml/wordprocessingml/parts/notes/elements';
+import { WmlBaseNote, WmlEndnote, WmlFootnote } from '@docx/ooxml/wordprocessingml/parts/notes/elements';
 import { ThemePart } from '@docx/ooxml/drawingml/theme/theme-part';
 import { Part } from '@docx/opc/parts/part';
 import type { Stage } from 'konva/lib/Stage';
@@ -22,19 +22,19 @@ import { splitOnOverflow, splitRegionOnOverflow } from '@docx/rendering/paginati
 import { buildPageLayoutContexts, type PageLayoutContext } from '@docx/rendering/pagination/model/page-numbering';
 import { TableContext } from '@docx/rendering/dom/elements/table-renderer';
 import { renderNotes as renderNotesFn } from '@docx/rendering/dom/elements/notes-renderer';
-import { MathRendererCallbacks, mathJustificationToTextAlign } from '@docx/rendering/dom/elements/math-renderer';
-import { DrawingRenderContext, createKonva as createKonvaFn } from '@docx/rendering/dom/elements/drawing-renderer';
+import { createKonva as createKonvaFn } from '@docx/rendering/dom/elements/drawing-renderer';
 import { renderHeaderFooter as renderHeaderFooterFn } from '@docx/rendering/dom/elements/header-footer-renderer';
-import { InlineRendererCallbacks, renderText as renderTextFn } from '@docx/rendering/dom/elements/inline-renderer';
-import { FieldsRendererCallbacks, resolveFieldRuns as resolveFieldRunsFn, resolveSimpleField as resolveSimpleFieldFn } from '@docx/rendering/dom/elements/fields-renderer';
+import { renderText as renderTextFn } from '@docx/rendering/dom/elements/inline-renderer';
+import { resolveFieldRuns as resolveFieldRunsFn, resolveSimpleField as resolveSimpleFieldFn } from '@docx/rendering/dom/elements/fields-renderer';
 import { renderDefaultStyle as renderDefaultStyleFn, renderWrapper as renderWrapperFn } from '@docx/rendering/dom/styles/default-styles';
 import { processStyleName as processStyleNameFn, processStyles as processStylesFn, renderFontTable as renderFontTableFn, renderStyles as renderStylesFn, renderTheme as renderThemeFn } from '@docx/rendering/dom/styles/document-styles';
 import { levelTextToContent as levelTextToContentFn, numberingClass as numberingClassFn, numberingCounter as numberingCounterFn, numFormatToCssValue as numFormatToCssValueFn, processNumberings as processNumberingsFn, renderNumbering as renderNumberingFn, styleToString as styleToStringFn } from '@docx/rendering/dom/styles/numbering-styles';
-import { PageRendererCallbacks, createPage as createPageFn, createPageContent as createPageContentFn, renderHeaderFooterRef as renderHeaderFooterRefFn } from '@docx/rendering/dom/elements/page-renderer';
+import { createPage as createPageFn, createPageContent as createPageContentFn, renderHeaderFooterRef as renderHeaderFooterRefFn } from '@docx/rendering/dom/elements/page-renderer';
 import { splitDocumentIntoPhysicalPages } from '@docx/rendering/pagination/core/modern-page-splitter';
-import { processElement, processTable } from '@docx/rendering/dom/core/element-processor';
+import { processElement, linkParents } from '@docx/rendering/dom/core/element-processor';
 import { renderStyleValues, renderClass, renderCommonProperties } from '@docx/rendering/dom/styles/style-applier';
-import { dispatchElement, ElementDispatchContext } from '@docx/rendering/dom/core/element-dispatcher';
+import { dispatchElement } from '@docx/rendering/dom/core/element-dispatcher';
+import type { RenderContext } from '@docx/rendering/render-context';
 
 interface RenderSplitContext {
 	regionIndex: number;
@@ -52,7 +52,7 @@ interface RenderSession {
 	/** The page currently being rendered. Advances as overflow splits pages. */
 	currentPage: Page;
 	/** The OPC Part that owns currently-rendered content (changes per header/footer/drawing). */
-	currentPart: Part;
+	currentPart: Part | null;
 	/** Footnote ref ids collected for the current page. Reset per page. */
 	currentFootnoteIds: string[];
 	/** Endnote ref ids collected across all pages. */
@@ -71,6 +71,8 @@ interface RenderSession {
 	overflowContentElement?: HTMLElement;
 	/** Whether append operations should measure overflow. */
 	checkingOverflow: boolean;
+	/** Maps parsed elements to their body source paths (replaces elem.sourcePath mutation). */
+	sourcePaths: WeakMap<OpenXmlElement, string>;
 }
 
 export class HtmlRendererSync {
@@ -133,7 +135,6 @@ export class HtmlRendererSync {
 		if (document.settingsPart) {
 			this.defaultTabSize = document.settingsPart.settings?.defaultTabStop;
 		}
-		this.assignSourcePaths(document.documentPart.body.children);
 
 		if (this.options.inWrapper) {
 			this.wrapper = this.renderWrapper();
@@ -143,9 +144,11 @@ export class HtmlRendererSync {
 		}
 
 		const { stage, layer } = createKonvaFn(this.bodyContainer);
-			this.session = {
-				pages: [],
-				currentPage: null,
+		const sourcePaths = new WeakMap<OpenXmlElement, string>();
+
+		this.session = {
+			pages: [],
+			currentPage: null,
 			currentPart: null,
 			currentFootnoteIds: [],
 			currentEndnoteIds: [],
@@ -157,11 +160,18 @@ export class HtmlRendererSync {
 			},
 			usedHeaderFooterParts: [],
 			currentTabs: [],
-				konvaStage: stage,
-				konvaLayer: layer,
-				overflowContentElement: undefined,
-				checkingOverflow: false,
-			};
+			konvaStage: stage,
+			konvaLayer: layer,
+			overflowContentElement: undefined,
+			checkingOverflow: false,
+			sourcePaths,
+		};
+
+		this.buildSourcePaths(document.documentPart.body.children, sourcePaths);
+		// Establish parent links and propagate table cell styles across the entire body tree
+		// before any page splitting or rendering, so page children already have correct parents.
+		linkParents(document.documentPart.body);
+		processElement(document.documentPart.body);
 
 		await this.renderPages(document.documentPart.body);
 
@@ -171,23 +181,24 @@ export class HtmlRendererSync {
 		this.session = null;
 	}
 
-	private assignSourcePaths(children: OpenXmlElement[]) {
+	/** Populate the sourcePaths WeakMap without mutating parsed elements. */
+	private buildSourcePaths(children: OpenXmlElement[], map: WeakMap<OpenXmlElement, string>) {
 		children.forEach((child, index) => {
 			const path = `body/${index}`;
-			child.sourcePath = path;
-			this.assignNestedSourcePaths(child, path);
+			map.set(child, path);
+			this.buildNestedSourcePaths(child, path, map);
 		});
 	}
 
-	private assignNestedSourcePaths(element: OpenXmlElement, path: string) {
+	private buildNestedSourcePaths(element: OpenXmlElement, path: string, map: WeakMap<OpenXmlElement, string>) {
 		if (element.type === DomType.Table) {
 			element.children?.forEach((row, rowIndex) => {
 				row.children?.forEach((cell, cellIndex) => {
 					const cellPath = `${path}/cell/${rowIndex}/${cellIndex}`;
-					cell.sourcePath = cellPath;
+					map.set(cell, cellPath);
 					cell.children?.forEach((child) => {
-						child.sourcePath = cellPath;
-						this.assignNestedSourcePaths(child, cellPath);
+						map.set(child, cellPath);
+						this.buildNestedSourcePaths(child, cellPath, map);
 					});
 				});
 			});
@@ -195,8 +206,8 @@ export class HtmlRendererSync {
 		}
 
 		element.children?.forEach((child) => {
-			child.sourcePath = path;
-			this.assignNestedSourcePaths(child, path);
+			map.set(child, path);
+			this.buildNestedSourcePaths(child, path, map);
 		});
 	}
 
@@ -284,6 +295,65 @@ export class HtmlRendererSync {
 		};
 	}
 
+	/** Build the unified render context used by all sub-renderers. */
+	private renderContext(): RenderContext {
+		return {
+			// identity
+			className: this.className,
+			document: this.document,
+			options: this.options,
+			// session state
+			currentPart: this.session.currentPart,
+			konvaStage: this.session.konvaStage,
+			konvaLayer: this.session.konvaLayer,
+			tableCtx: this.session.tableCtx,
+			currentTabs: this.session.currentTabs,
+			currentFootnoteIds: this.session.currentFootnoteIds,
+			currentEndnoteIds: this.session.currentEndnoteIds,
+			usedHeaderFooterParts: this.session.usedHeaderFooterParts,
+			evenAndOddHeaders: this.document.settingsPart.settings.evenAndOddHeaders,
+			ignoreWidth: this.options.ignoreWidth,
+			ignoreHeight: this.options.ignoreHeight,
+			// element tree helpers
+			linkParents: (elem) => linkParents(elem),
+			processElement: (elem) => processElement(elem),
+			// core render operations
+			appendChildren: (p, c) => this.appendChildren(p, c),
+			appendChildrenWithoutOverflow: (p, c) => appendChildrenSync(p, c),
+			renderChildren: (e, p) => this.renderChildren(e, p),
+			renderElements: (ch, p) => this.renderElements(ch, p),
+			renderElement: (e, p) => this.renderElement(e, p),
+			renderContainer: (e, t, pr) => this.renderContainer(e, t, pr),
+			renderContainerNS: (e, n, t, pr) => this.renderContainerNS(e, n, t, pr),
+			renderHeaderFooter: (e, t, p) => this.renderHeaderFooter(e, t, p),
+			// style helpers
+			renderClass: (e, o) => renderClass(e, o, n => this.processStyleName(n)),
+			renderStyleValues: (s, o) => renderStyleValues(s, o),
+			renderCommonProperties: (s, p) => renderCommonProperties(s, p),
+			// lookup helpers
+			findStyle: (styleName) => this.findStyle(styleName),
+			numberingClass: (id, level) => this.numberingClass(id, level),
+			findExternalRelation: (id) => this.document.documentPart.rels.find(
+				it => it.id == id && it.targetMode === 'External'
+			),
+			findComment: (id) => this.document.commentsPart?.commentMap[id],
+			// page state accessors
+			currentPageIsSplit: () => this.session.currentPage.isSplit,
+			currentSectionProperties: () => this.session.currentPage.sectProps,
+			currentPageNumber: () => {
+				const pages = this.session.pages ?? [];
+				return pages.findIndex(p => p.pageId === this.session.currentPage.pageId) + 1;
+			},
+			pageCount: () => this.session.pages?.length ?? 0,
+			// field helpers
+			resolveFieldRuns: (runs) => this.resolveFieldRuns(runs),
+			renderText: (e, p) => renderTextFn(e, p, this.renderContext()),
+			renderChanges: () => this.options.renderChanges,
+			// session mutations
+			setCurrentPart: part => { this.session.currentPart = part; },
+		};
+	}
+
 	private splitPageBySymbol(documentElement: DocumentElement): Page[] {
 		const split = splitDocumentIntoPhysicalPages(documentElement);
 		const physicalPagesWithRegions = split.pages.filter(physicalPage => physicalPage.regions.length > 0);
@@ -303,7 +373,6 @@ export class HtmlRendererSync {
 				sectProps: layoutContext?.activeSection ?? activeRegion?.section ?? documentElement.sectProps,
 				children,
 				regions: physicalPage.regions,
-				physicalPage,
 				layoutContext,
 			} as PageProps);
 		});
@@ -316,9 +385,9 @@ export class HtmlRendererSync {
 		} else {
 			pages = [new Page({ isSplit: true, sectProps: document.sectProps, children: document.children, } as PageProps)];
 		}
-			this.session.pages = pages;
-			let prevProps = null;
-		let origin_pages = [...pages];
+		this.session.pages = pages;
+		let prevProps = null;
+		const origin_pages = [...pages];
 		for (let i = 0; i < origin_pages.length; i++) {
 			this.session.currentFootnoteIds = [];
 			const page: Page = origin_pages[i];
@@ -326,8 +395,8 @@ export class HtmlRendererSync {
 			page.sectProps = sectProps ?? document.sectProps;
 			page.isFirstPage = page.layoutContext?.isFirstSectionPage ?? prevProps != page.sectProps;
 			page.isLastPage = i === origin_pages.length - 1;
-				this.session.checkingOverflow = false;
-				this.session.currentPage = page;
+			this.session.checkingOverflow = false;
+			this.session.currentPage = page;
 			prevProps = page.sectProps;
 			await this.renderPage();
 		}
@@ -335,12 +404,11 @@ export class HtmlRendererSync {
 
 	private async renderPage() {
 		const { pageId, sectProps, children, isFirstPage, isLastPage, regions, layoutContext } = this.session.currentPage;
-		processElement(this.session.currentPage);
 		const pageElement = this.createPage(this.className, sectProps);
 
 		renderStyleValues(this.document.documentPart.body.cssStyle, pageElement);
 
-			const pages = this.session.pages;
+		const pages = this.session.pages;
 		const pageIndex = pages.findIndex((page) => page.pageId === pageId);
 
 		let oHeader: HTMLElement = null;
@@ -367,42 +435,42 @@ export class HtmlRendererSync {
 				pageElement.style.height = sectProps.pageSize.height;
 			}
 
-			let isOverflow = Overflow.FALSE;
+			let isOverflow = Overflow.NONE;
 			for (let regionIndex = 0; regionIndex < regions.length; regionIndex++) {
 				const region = regions[regionIndex];
 				const regionArticle = this.createPageContent(region.section);
 				regionArticle.dataset.sectionId = region.section?.sectionId;
 				regionArticle.dataset.breakBefore = region.breakBefore;
 				pageElement.appendChild(regionArticle);
-					this.session.overflowContentElement = pageElement;
-					this.session.checkingOverflow = this.options.breakPages;
-				isOverflow = await this.renderElements(region.children, regionArticle, { regionIndex });
-				if (isOverflow !== Overflow.FALSE && isOverflow !== Overflow.UNKNOWN && isOverflow !== Overflow.IGNORE) {
+				this.session.overflowContentElement = pageElement;
+				this.session.checkingOverflow = this.options.breakPages;
+				isOverflow = await this.renderElements(region.children, regionArticle, { regionIndex }, true);
+				if (isOverflow !== Overflow.NONE && isOverflow !== Overflow.UNCHECKED && isOverflow !== Overflow.SKIP) {
 					break;
 				}
 			}
-			if (isOverflow === Overflow.FALSE || isOverflow === Overflow.UNKNOWN || isOverflow === Overflow.IGNORE) {
+			if (isOverflow === Overflow.NONE || isOverflow === Overflow.UNCHECKED || isOverflow === Overflow.SKIP) {
 				this.session.currentPage.isSplit = true;
 				pages[pageIndex] = this.session.currentPage;
 			}
-				this.session.checkingOverflow = false;
-			} else {
+			this.session.checkingOverflow = false;
+		} else {
 			const contentElement = this.createPageContent(sectProps);
 			if (this.options.breakPages) {
 				contentElement.style.height = `${contentHeight}pt`;
 			} else {
 				contentElement.style.minHeight = `${contentHeight}pt`;
 			}
-				pageElement.appendChild(contentElement);
-				this.session.overflowContentElement = contentElement;
-				this.session.checkingOverflow = true;
-			const is_overflow = await this.renderElements(children, contentElement);
-			if (is_overflow === Overflow.FALSE) {
+			pageElement.appendChild(contentElement);
+			this.session.overflowContentElement = contentElement;
+			this.session.checkingOverflow = true;
+			const is_overflow = await this.renderElements(children, contentElement, undefined, true);
+			if (is_overflow === Overflow.NONE) {
 				this.session.currentPage.isSplit = true;
 				pages[pageIndex] = this.session.currentPage;
 			}
-				this.session.checkingOverflow = false;
-			}
+			this.session.checkingOverflow = false;
+		}
 
 		if (this.options.renderFootnotes) {
 			await this.renderNotes(DomType.Footnotes, this.session.currentFootnoteIds, this.footnoteMap, pageElement);
@@ -424,47 +492,35 @@ export class HtmlRendererSync {
 	}
 
 	private async renderHeaderFooterRef(refs: FooterHeaderReference[], props: SectionProperties, pageIndex: number, isFirstPage: boolean, layoutContext: PageLayoutContext | undefined, parent: HTMLElement) {
-		return renderHeaderFooterRefFn(refs, props, pageIndex, isFirstPage, layoutContext, parent, this.pageRendererCallbacks());
-	}
-
-	private pageRendererCallbacks(): PageRendererCallbacks {
-		return {
-			document: this.document,
-			ignoreWidth: this.options.ignoreWidth,
-			ignoreHeight: this.options.ignoreHeight,
-			evenAndOddHeaders: this.document.settingsPart.settings.evenAndOddHeaders,
-			usedHeaderFooterParts: this.session.usedHeaderFooterParts,
-			setCurrentPart: part => { this.session.currentPart = part; },
-			processElement: elem => processElement(elem),
-			renderHeaderFooter: (elem, tagName, parent) => this.renderHeaderFooter(elem, tagName, parent),
-		};
+		return renderHeaderFooterRefFn(refs, props, pageIndex, isFirstPage, layoutContext, parent, this.renderContext());
 	}
 
 	private async renderNotes(type: DomType = DomType.Footnotes, noteIds: string[], notesMap: Record<string, WmlBaseNote>, parent: HTMLElement) {
-		return renderNotesFn(type, noteIds, notesMap, parent, {
-			processElement: (e) => processElement(e),
-			renderChildren: (e, p) => this.renderChildren(e, p),
-		});
+		return renderNotesFn(type, noteIds, notesMap, parent, this.renderContext());
 	}
 
-	private async renderElements(children: OpenXmlElement[], parent: HTMLElement | Element | Text, splitContext?: RenderSplitContext): Promise<Overflow> {
+	private async renderElements(
+		children: OpenXmlElement[],
+		parent: HTMLElement | Element | Text,
+		splitContext?: RenderSplitContext,
+		topLevel: boolean = false,
+	): Promise<Overflow> {
 		const overflows: Overflow[] = [];
-			const pages = this.session.pages;
+		const pages = this.session.pages;
 		const { pageId } = this.session.currentPage;
 		const pageIndex = pages.findIndex(p => p.pageId === pageId);
 		type RenderAction = 'continue' | 'break' | 'break-after-current';
-		const BREAKING_OVERFLOWS = new Set([Overflow.SELF, Overflow.TRUE, Overflow.FULL, Overflow.PART]);
+		const BREAKING_OVERFLOWS = new Set([Overflow.SELF, Overflow.FULL, Overflow.PARTIAL]);
 
 		for (let i = 0; i < children.length; i++) {
 			const elem = children[i];
-			elem.index = i;
 			if (!elem.breakIndex) elem.breakIndex = new Set();
 
 			const rendered = await this.renderElement(elem, parent);
-			let overflow: Overflow = rendered?.dataset?.overflow as Overflow ?? Overflow.UNKNOWN;
+			let overflow: Overflow = rendered?.dataset?.overflow as Overflow ?? Overflow.UNCHECKED;
 			let action: RenderAction = 'continue';
 
-			const isFirstPageElement = elem.level === 2 && i === 0;
+			const isFirstPageElement = topLevel && i === 0;
 
 			if (isFirstPageElement && BREAKING_OVERFLOWS.has(overflow)) {
 				action = 'break-after-current';
@@ -472,26 +528,25 @@ export class HtmlRendererSync {
 				switch (overflow) {
 					case Overflow.SELF:
 						elem.breakIndex.add(0);
-						elem.parent.breakIndex.add(i);
+						this.session.currentPage.breakIndex.add(i);
 						removeElements(rendered, parent);
 						action = 'break';
 						break;
 
-					case Overflow.TRUE:
 					case Overflow.FULL:
-						elem.parent.breakIndex.add(i);
+						this.session.currentPage.breakIndex.add(i);
 						if (elem.type !== DomType.Cell) removeElements(rendered, parent);
 						action = 'break';
 						break;
 
-					case Overflow.PART:
-						elem.parent.breakIndex.add(i);
+					case Overflow.PARTIAL:
+						this.session.currentPage.breakIndex.add(i);
 						action = 'break';
 						break;
 
 					default:
 						action = 'continue';
-						if (overflow !== Overflow.FALSE && overflow !== Overflow.UNKNOWN && overflow !== Overflow.IGNORE && this.options.debug) {
+						if (overflow !== Overflow.NONE && overflow !== Overflow.UNCHECKED && overflow !== Overflow.SKIP && this.options.debug) {
 							console.error('unhandled overflow', overflow, elem);
 						}
 				}
@@ -501,7 +556,7 @@ export class HtmlRendererSync {
 			overflows.push(overflow);
 
 			if (action === 'break' || action === 'break-after-current') {
-				if (elem.level === 2) {
+				if (topLevel) {
 					const overflowIndex = action === 'break-after-current' ? i + 1 : i;
 					if (overflowIndex < children.length) {
 						if (splitContext) {
@@ -509,7 +564,6 @@ export class HtmlRendererSync {
 						} else {
 							splitOnOverflow(this.session.currentPage, pages, pageIndex, overflowIndex);
 						}
-						processElement(this.session.currentPage);
 						this.session.currentPage = pages[pageIndex + 1];
 						await this.renderPage();
 					} else {
@@ -525,36 +579,15 @@ export class HtmlRendererSync {
 	}
 
 	private async renderElement(elem: OpenXmlElement, parent?: HTMLElement | Element | Text): Promise<Node_DOM> {
-		const oNode = await dispatchElement(elem, parent, this.dispatchContext());
+		const oNode = await dispatchElement(elem, parent, this.renderContext());
 		if (oNode && oNode.nodeType === 1) {
 			oNode.dataset.tag = elem.type;
-			if (elem.sourcePath && this.isSourceAnchor(elem)) {
-				oNode.dataset.vellumPath = elem.sourcePath;
+			const sourcePath = this.session.sourcePaths.get(elem);
+			if (sourcePath && this.isSourceAnchor(elem)) {
+				oNode.dataset.vellumPath = sourcePath;
 			}
 		}
 		return oNode as Node_DOM;
-	}
-
-	private dispatchContext(): ElementDispatchContext {
-		return {
-			appendChildren: (p, c) => this.appendChildren(p, c),
-			renderChildren: (e, p) => this.renderChildren(e, p),
-			renderElements: (ch, p) => this.renderElements(ch, p),
-			renderContainer: (e, t, pr) => this.renderContainer(e, t, pr),
-			renderContainerNS: (e, n, t, pr) => this.renderContainerNS(e, n, t, pr),
-			renderHeaderFooter: (e, t, p) => this.renderHeaderFooter(e, t, p),
-			inlineCallbacks: () => this.inlineCallbacks(),
-			mathCallbacks: () => this.mathCallbacks(),
-			fieldsCallbacks: () => this.fieldsCallbacks(),
-			drawingRenderContext: () => this.drawingRenderContext(),
-			tableCtx: this.session.tableCtx,
-			className: this.className,
-			currentTabs: this.session.currentTabs,
-			currentFootnoteIds: this.session.currentFootnoteIds,
-			currentEndnoteIds: this.session.currentEndnoteIds,
-			renderClass: (e, o) => renderClass(e, o, n => this.processStyleName(n)),
-			renderStyleValues: (s, o) => renderStyleValues(s, o),
-		};
 	}
 
 	private isSourceAnchor(elem: OpenXmlElement): boolean {
@@ -587,74 +620,12 @@ export class HtmlRendererSync {
 		return parent;
 	}
 
-	private mathCallbacks(): MathRendererCallbacks {
-		return {
-			renderElement: (e, p) => this.renderElement(e, p as HTMLElement) as any,
-			renderElements: (es, p) => this.renderElements(es, p as HTMLElement),
-			renderChildren: (e, p) => this.renderChildren(e, p as HTMLElement),
-			renderContainerNS: (e, n, t, pr) => this.renderContainerNS(e, n, t, pr),
-			renderClass: (e, o) => renderClass(e, o, n => this.processStyleName(n)),
-			renderStyleValues: (s, o) => renderStyleValues(s, o),
-			className: this.className,
-		};
-	}
-
 	private resolveFieldRuns(runs: OpenXmlElement[]): OpenXmlElement[] {
-		return resolveFieldRunsFn(runs, this.fieldsCallbacks());
+		return resolveFieldRunsFn(runs, this.renderContext());
 	}
 
 	private resolveSimpleField(elem: WmlFieldSimple): OpenXmlElement[] {
-		return resolveSimpleFieldFn(elem, this.fieldsCallbacks());
-	}
-
-	private fieldsCallbacks(): FieldsRendererCallbacks {
-		return {
-			processElement: (e) => processElement(e),
-			renderChildren: (e, p) => this.renderChildren(e, p),
-			appendChildren: (p, c) => this.appendChildren(p, c),
-			appendChildrenWithoutOverflow: (p, c) => appendChildrenSync(p, c),
-			renderText: (e, p) => renderTextFn(e, p, this.inlineCallbacks()),
-			findComment: (id) => this.document.commentsPart?.commentMap[id],
-			currentPageNumber: () => {
-					const pages = this.session.pages ?? [];
-					return pages.findIndex(p => p.pageId === this.session.currentPage.pageId) + 1;
-				},
-				pageCount: () => this.session.pages?.length ?? 0,
-			renderChanges: () => this.options.renderChanges,
-		};
-	}
-
-	private inlineCallbacks(): InlineRendererCallbacks {
-		return {
-			appendChildren: (p, c) => this.appendChildren(p, c),
-			renderChildren: (e, p) => this.renderChildren(e, p),
-			renderClass: (e, o) => renderClass(e, o, n => this.processStyleName(n)),
-			renderCommonProperties: (s, p) => renderCommonProperties(s, p),
-			renderStyleValues: (s, o) => renderStyleValues(s, o),
-			resolveFieldRuns: (runs) => this.resolveFieldRuns(runs),
-			findStyle: (styleName) => this.findStyle(styleName),
-			numberingClass: (id, level) => this.numberingClass(id, level),
-			currentPageIsSplit: () => this.session.currentPage.isSplit,
-			currentSectionProperties: () => this.session.currentPage.sectProps,
-			findExternalRelation: (id) => this.document.documentPart.rels.find(
-				it => it.id == id && it.targetMode === 'External'
-			),
-		};
-	}
-
-	private drawingRenderContext(): DrawingRenderContext {
-		return {
-			document: this.document,
-			currentPart: this.session.currentPart,
-			options: this.options,
-			className: this.className,
-			konvaStage: this.session.konvaStage,
-			konvaLayer: this.session.konvaLayer,
-			appendChildren: (p, c) => this.appendChildren(p, c),
-			renderChildren: (e, p) => this.renderChildren(e, p),
-			renderElement: (e, p) => this.renderElement(e, p),
-			renderStyleValues: (s, o) => renderStyleValues(s, o),
-		};
+		return resolveSimpleFieldFn(elem, this.renderContext());
 	}
 
 	private async renderHeaderFooter(elem: OpenXmlElement, tagName: keyof HTMLElementTagNameMap, parent: HTMLElement) {

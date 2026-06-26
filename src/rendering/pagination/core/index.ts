@@ -7,6 +7,5 @@ export * from '@docx/rendering/pagination/model/page-numbering';
 export * from '@docx/rendering/pagination/context/header-footer-context';
 export * from '@docx/rendering/pagination/core/modern-page-splitter';
 export * from '@docx/rendering/pagination/model/explicit-breaks';
-export * from '@docx/rendering/pagination/core/pagination';
 export * from '@docx/rendering/pagination/model/page-split';
 export * from '@docx/rendering/pagination/model/split-by-break';

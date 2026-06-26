@@ -1,7 +1,7 @@
-import { DomType, OpenXmlElement } from '@docx/ooxml/wordprocessingml/document/model/dom';
+import { OpenXmlElement } from '@docx/ooxml/wordprocessingml/document/model/dom';
 import { SectionProperties } from '@docx/ooxml/wordprocessingml/document/model/section';
 import { uuid } from '@docx/shared/utils';
-import type { LayoutRegion, PhysicalPage } from './layout-region';
+import type { LayoutRegion } from './layout-region';
 import type { PageLayoutContext } from './page-numbering';
 
 export interface TreeNode extends OpenXmlElement {
@@ -18,23 +18,19 @@ export interface PageProps {
 	isLastPage?: boolean;
 	breakIndex?: Set<number>;
 	regions?: LayoutRegion[];
-	physicalPage?: PhysicalPage;
 	layoutContext?: PageLayoutContext;
 }
 
-export class Page implements OpenXmlElement {
-	type: DomType;
+export class Page {
 	pageId: string;
 	sectProps?: SectionProperties;
 	children: OpenXmlElement[];
 	stack: TreeNode[];
-	level?: number;
 	isSplit: boolean;
 	isFirstPage?: boolean;
 	isLastPage?: boolean;
 	breakIndex?: Set<number>;
 	regions?: LayoutRegion[];
-	physicalPage?: PhysicalPage;
 	layoutContext?: PageLayoutContext;
 
 	constructor({
@@ -46,11 +42,8 @@ export class Page implements OpenXmlElement {
 		isLastPage = false,
 		breakIndex = new Set(),
 		regions,
-		physicalPage,
 		layoutContext,
 	}: PageProps) {
-		this.type = DomType.Page;
-		this.level = 1;
 		this.pageId = uuid();
 		this.sectProps = sectProps;
 		this.children = children;
@@ -60,7 +53,6 @@ export class Page implements OpenXmlElement {
 		this.isLastPage = isLastPage;
 		this.breakIndex = breakIndex;
 		this.regions = regions;
-		this.physicalPage = physicalPage;
 		this.layoutContext = layoutContext;
 	}
 }

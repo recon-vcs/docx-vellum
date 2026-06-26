@@ -1,27 +1,24 @@
 import Konva from 'konva';
-import type { Layer } from 'konva/lib/Layer';
-import type { Stage } from 'konva/lib/Stage';
 import { DomType, OpenXmlElement } from '@docx/ooxml/wordprocessingml/model/element';
 import { WmlDrawing, WmlImage } from '@docx/ooxml/drawingml/model/drawing';
-import { Part } from '@docx/opc/parts/part';
-import type { Options } from '@docx/options';
 import { getPresetGeometryPaths } from '@docx/ooxml/drawingml/shapes/preset-geometry';
 import { VmlElement } from '@docx/ooxml/vml/vml';
-import { WordDocument } from '@docx/word-document';
 import { appendChildren, createElement, createSvgElement } from '@docx/rendering/dom/core/dom-utils';
 import { Overflow } from '@docx/rendering/measurement/overflow';
+import type { RenderContext } from '@docx/rendering/render-context';
 
-export interface DrawingRenderContext {
-	document: WordDocument;
-	currentPart: Part;
-	options: Options;
-	className: string;
-	konvaStage: Stage;
-	konvaLayer: Layer;
-	appendChildren(parent: HTMLElement | Text, children: Element): Promise<Overflow>;
-	renderChildren(elem: OpenXmlElement, parent: HTMLElement | Element | Text): Promise<Overflow>;
-	renderElement(elem: OpenXmlElement, parent?: HTMLElement | Element | Text): Promise<Node>;
-	renderStyleValues(style: Record<string, string>, output: HTMLElement): void;
+export function createKonva(bodyContainer: HTMLElement): { stage: Konva.Stage; layer: Konva.Layer } {
+	const oContainer = createElement('div');
+	const containerId = `konva-container-${Math.random().toString(36).slice(2)}`;
+	oContainer.id = containerId;
+	appendChildren(bodyContainer, oContainer);
+
+	const stage = new Konva.Stage({ container: containerId });
+	const layer = new Konva.Layer({ listening: false });
+	stage.add(layer);
+	stage.visible(true);
+
+	return { stage, layer };
 }
 
 async function waitForImageDecode(image: HTMLImageElement): Promise<void> {
@@ -36,24 +33,10 @@ async function waitForImageDecode(image: HTMLImageElement): Promise<void> {
 	}
 }
 
-export function createKonva(bodyContainer: HTMLElement): { stage: Stage; layer: Layer } {
-	const oContainer = createElement('div');
-	const containerId = `konva-container-${Math.random().toString(36).slice(2)}`;
-	oContainer.id = containerId;
-	appendChildren(bodyContainer, oContainer);
-
-	const stage = new Konva.Stage({ container: containerId });
-	const layer = new Konva.Layer({ listening: false });
-	stage.add(layer);
-	stage.visible(true);
-
-	return { stage, layer };
-}
-
 export async function renderDrawing(
 	elem: WmlDrawing,
 	parent: HTMLElement,
-	ctx: DrawingRenderContext
+	ctx: RenderContext
 ): Promise<HTMLElement> {
 	const childHasAutoFit = elem.children?.some((c: OpenXmlElement) => c.props?.textbox?.autoFit === 'shape');
 
@@ -72,7 +55,7 @@ export async function renderDrawing(
 	}
 
 	const isOverflow = await ctx.appendChildren(parent, oDrawing);
-	if (isOverflow === Overflow.TRUE) {
+	if (isOverflow === Overflow.SELF) {
 		oDrawing.dataset.overflow = Overflow.SELF;
 		return oDrawing;
 	}
@@ -84,7 +67,7 @@ export async function renderDrawing(
 export async function renderImage(
 	elem: WmlImage,
 	parent: HTMLElement,
-	ctx: DrawingRenderContext
+	ctx: RenderContext
 ): Promise<HTMLImageElement> {
 	const { is_clip, is_transform } = elem.props;
 	const oImage = new Image();
@@ -109,12 +92,11 @@ export async function renderImage(
 export async function renderShape(
 	elem: OpenXmlElement,
 	parent: HTMLElement,
-	ctx: DrawingRenderContext
+	ctx: RenderContext
 ): Promise<HTMLElement> {
 	const textbox = elem.props?.textbox ?? {};
 	const autoFit = textbox.autoFit === 'shape';
 
-	// For autoFit textboxes, don't apply fixed height — let content drive size.
 	const containerStyle = autoFit
 		? Object.fromEntries(Object.entries(elem.cssStyle).filter(([k]) => k !== 'height'))
 		: elem.cssStyle;
@@ -158,9 +140,9 @@ export async function renderShape(
 		oText.style.position = 'relative';
 		oText.style.boxSizing = 'border-box';
 		oText.style.overflow = 'hidden';
-			oText.style.display = 'flex';
-			oText.style.flexDirection = 'column';
-			oText.style.alignItems = 'flex-start';
+		oText.style.display = 'flex';
+		oText.style.flexDirection = 'column';
+		oText.style.alignItems = 'flex-start';
 		oText.style.paddingLeft = textbox.paddingLeft ?? '';
 		oText.style.paddingTop = textbox.paddingTop ?? '';
 		oText.style.paddingRight = textbox.paddingRight ?? '';
@@ -168,11 +150,9 @@ export async function renderShape(
 		oText.style.justifyContent = textbox.verticalAnchor === 'b' ? 'flex-end' : textbox.verticalAnchor === 'ctr' ? 'center' : 'flex-start';
 
 		if (autoFit) {
-			// Let the textbox size to content; use original (pre-rotation) width if available.
 			oText.style.width = elem.props?.originalWidth ?? '100%';
 			oText.style.height = 'auto';
 		} else {
-			// Fixed size: use original dimensions to avoid rotated bounding box distortion.
 			oText.style.width = elem.props?.originalWidth ?? '100%';
 			oText.style.height = elem.props?.originalHeight ?? '100%';
 		}
@@ -188,7 +168,7 @@ export async function renderShape(
 export async function transformImage(
 	elem: WmlImage,
 	source: string,
-	ctx: DrawingRenderContext
+	ctx: RenderContext
 ): Promise<string> {
 	const { is_clip, clip, is_transform, transform } = elem.props;
 	const img = new Image();
@@ -253,7 +233,7 @@ export async function transformImage(
 export async function renderVmlElement(
 	elem: VmlElement,
 	parent: HTMLElement,
-	ctx: DrawingRenderContext
+	ctx: RenderContext
 ): Promise<SVGElement> {
 	const oSvg = createSvgElement('svg');
 	oSvg.setAttribute('style', elem.cssStyleText);
@@ -282,7 +262,7 @@ export async function renderVmlElement(
 
 export async function renderVmlPicture(
 	elem: OpenXmlElement,
-	ctx: DrawingRenderContext
+	ctx: RenderContext
 ): Promise<HTMLElement> {
 	const oPictureContainer = createElement('span');
 	await ctx.renderChildren(elem, oPictureContainer);
@@ -291,7 +271,7 @@ export async function renderVmlPicture(
 
 export async function renderVmlChildElement(
 	elem: VmlElement,
-	ctx: DrawingRenderContext
+	ctx: RenderContext
 ): Promise<SVGElement> {
 	const oVMLElement = createSvgElement(elem.tagName as any);
 	Object.entries(elem.attrs).forEach(([k, v]) => oVMLElement.setAttribute(k, v));

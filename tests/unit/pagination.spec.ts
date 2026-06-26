@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { BreakType, DomType, OpenXmlElement } from '../../src/ooxml/wordprocessingml/model/element';
 import { SectionProperties, SectionType } from '../../src/ooxml/wordprocessingml/document/model/section';
-import { buildPaginationPlan } from '../../src/rendering/pagination/core/pagination';
+import { DocumentElement } from '../../src/ooxml/wordprocessingml/document/model/document';
+import { splitDocumentIntoPhysicalPages } from '../../src/rendering/pagination/core/modern-page-splitter';
 
 function section(sectionId: string, type?: SectionType): SectionProperties {
 	return { sectionId, type } as SectionProperties;
@@ -22,35 +23,39 @@ function explicitPageBreak(): OpenXmlElement {
 	};
 }
 
-describe('buildPaginationPlan', () => {
+function doc(children: OpenXmlElement[], sectProps: SectionProperties): DocumentElement {
+	return { type: DomType.Document, children, sectProps };
+}
+
+describe('splitDocumentIntoPhysicalPages (pagination plan)', () => {
 	it('combines section stream, explicit breaks, and physical page construction', () => {
 		const firstSection = section('s1', SectionType.Continuous);
 		const rootSection = section('root');
 		const afterBreak = paragraph(undefined, [explicitPageBreak()]);
 
-		const plan = buildPaginationPlan([
+		const split = splitDocumentIntoPhysicalPages(doc([
 			paragraph(firstSection),
 			afterBreak,
 			paragraph(),
-		], rootSection);
+		], rootSection));
 
-		expect(plan.regions.map(region => region.breakBefore)).toEqual(['none', 'none', 'page']);
-		expect(plan.pages.map(page => page.pageNumber)).toEqual([1, 2]);
-		expect(plan.pages[0].regions).toHaveLength(2);
-		expect(plan.pages[1].regions).toHaveLength(1);
+		expect(split.regions.map(region => region.breakBefore)).toEqual(['none', 'none', 'page']);
+		expect(split.pages.map(page => page.pageNumber)).toEqual([1, 2]);
+		expect(split.pages[0].regions).toHaveLength(2);
+		expect(split.pages[1].regions).toHaveLength(1);
 	});
 
 	it('uses section break parity when building physical pages', () => {
 		const firstSection = section('s1', SectionType.OddPage);
 		const rootSection = section('root');
 
-		const plan = buildPaginationPlan([
+		const split = splitDocumentIntoPhysicalPages(doc([
 			paragraph(firstSection),
 			paragraph(),
-		], rootSection);
+		], rootSection));
 
-		expect(plan.regions.map(region => region.breakBefore)).toEqual(['none', 'oddPage']);
-		expect(plan.pages.map(page => page.pageNumber)).toEqual([1, 2, 3]);
-		expect(plan.pages[1].regions).toEqual([]);
+		expect(split.regions.map(region => region.breakBefore)).toEqual(['none', 'oddPage']);
+		expect(split.pages.map(page => page.pageNumber)).toEqual([1, 2, 3]);
+		expect(split.pages[1].regions).toEqual([]);
 	});
 });

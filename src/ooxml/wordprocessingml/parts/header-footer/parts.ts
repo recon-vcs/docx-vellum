@@ -16,7 +16,6 @@ export abstract class BaseHeaderFooterPart<T extends OpenXmlElement = OpenXmlEle
 
 	parseXml(root: Element) {
 		this.rootElement = this.createRootElement();
-		this.rootElement.level = 1;
 		this.rootElement.children = this._documentParser.parseBodyElements(root);
 	}
 

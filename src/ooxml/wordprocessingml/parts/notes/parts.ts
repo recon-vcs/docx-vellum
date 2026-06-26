@@ -22,7 +22,6 @@ export class FootnotesPart extends BaseNotePart<WmlFootnotes> {
 
 	parseXml(root: Element) {
 		this.rootElement = new WmlFootnotes();
-		this.rootElement.level = 1;
 		this.rootElement.children = this._documentParser.parseNotes(root, "footnote", WmlFootnote);
 	}
 }
@@ -34,7 +33,6 @@ export class EndnotesPart extends BaseNotePart<WmlEndnotes> {
 
 	parseXml(root: Element) {
 		this.rootElement = new WmlEndnotes();
-		this.rootElement.level = 1;
 		this.rootElement.children = this._documentParser.parseNotes(root, "endnote", WmlEndnote);
 	}
 }

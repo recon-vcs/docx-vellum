@@ -3,27 +3,16 @@ import { DomType, OpenXmlElement, WmlCharacter, WmlText } from '@docx/ooxml/word
 import { WmlFieldChar, WmlFieldSimple, WmlInstructionText } from '@docx/ooxml/wordprocessingml/document/model/fields';
 import { WmlRun } from '@docx/ooxml/wordprocessingml/document/model/run';
 import { WmlCommentRangeStart, WmlCommentReference } from '@docx/ooxml/wordprocessingml/parts/comments/elements';
-import { ChildrenType, createElement } from '@docx/rendering/dom/core/dom-utils';
+import { createElement } from '@docx/rendering/dom/core/dom-utils';
 import { Overflow } from '@docx/rendering/measurement/overflow';
-
-export interface FieldsRendererCallbacks {
-	processElement(elem: OpenXmlElement): void;
-	renderChildren(elem: OpenXmlElement, parent: HTMLElement): Promise<Overflow>;
-	appendChildren(parent: HTMLElement | Text, children: ChildrenType): Promise<Overflow>;
-	appendChildrenWithoutOverflow(parent: Element | Text, children: ChildrenType): void;
-	renderText(elem: WmlText, parent: HTMLElement): Promise<Node>;
-	findComment(id: string): { id: string; author: string; date: string } | undefined;
-	currentPageNumber(): number;
-	pageCount(): number;
-	renderChanges(): boolean;
-}
+import type { RenderContext } from '@docx/rendering/render-context';
 
 export function resolveFieldRuns(
 	runs: OpenXmlElement[],
-	callbacks: FieldsRendererCallbacks
+	ctx: RenderContext
 ): OpenXmlElement[] {
-	const pageNumber = callbacks.currentPageNumber();
-	const totalPages = callbacks.pageCount();
+	const pageNumber = ctx.currentPageNumber();
+	const totalPages = ctx.pageCount();
 	const result: OpenXmlElement[] = [];
 	let i = 0;
 
@@ -68,7 +57,8 @@ export function resolveFieldRuns(
 			const value = String(fieldName === 'PAGE' ? pageNumber : totalPages);
 			const template = (runs[resultStart] as WmlRun) ?? run;
 			const replacement = createFieldReplacement(value, template, run.parent);
-			callbacks.processElement(replacement);
+			ctx.linkParents(replacement);
+			ctx.processElement(replacement);
 			result.push(replacement);
 		} else {
 			result.push(...runs.slice(i, endIndex + 1));
@@ -81,10 +71,10 @@ export function resolveFieldRuns(
 
 export function resolveSimpleField(
 	elem: WmlFieldSimple,
-	callbacks: FieldsRendererCallbacks
+	ctx: RenderContext
 ): OpenXmlElement[] {
-	const pageNumber = callbacks.currentPageNumber();
-	const totalPages = callbacks.pageCount();
+	const pageNumber = ctx.currentPageNumber();
+	const totalPages = ctx.pageCount();
 	const fieldName = elem.instruction?.trim().split(/\s+/)[0]?.toUpperCase();
 
 	if (fieldName !== 'PAGE' && fieldName !== 'NUMPAGES') {
@@ -94,19 +84,20 @@ export function resolveSimpleField(
 	const value = String(fieldName === 'PAGE' ? pageNumber : totalPages);
 	const template = elem.children?.[0] as WmlRun;
 	const replacement = createFieldReplacement(value, template, elem.parent);
-	callbacks.processElement(replacement);
+	ctx.linkParents(replacement);
+	ctx.processElement(replacement);
 	return [replacement];
 }
 
 export function renderBookmarkStart(
 	elem: WmlBookmarkStart,
 	parent: HTMLElement,
-	callbacks: FieldsRendererCallbacks
+	ctx: RenderContext
 ): HTMLElement {
 	const oSpan = createElement('span');
 	oSpan.id = elem.name;
-	callbacks.appendChildrenWithoutOverflow(parent, oSpan);
-	oSpan.dataset.overflow = Overflow.IGNORE;
+	ctx.appendChildrenWithoutOverflow(parent, oSpan);
+	oSpan.dataset.overflow = Overflow.SKIP;
 
 	return oSpan;
 }
@@ -114,19 +105,18 @@ export function renderBookmarkStart(
 export async function renderInserted(
 	elem: OpenXmlElement,
 	parent: HTMLElement,
-	callbacks: FieldsRendererCallbacks
+	ctx: RenderContext
 ): Promise<HTMLModElement | HTMLSpanElement> {
-	const tagName: keyof HTMLElementTagNameMap = callbacks.renderChanges() ? 'ins' : 'span';
+	const tagName: keyof HTMLElementTagNameMap = ctx.renderChanges() ? 'ins' : 'span';
 	const oInserted = createElement(tagName) as HTMLModElement | HTMLSpanElement;
-	let isOverflow = await callbacks.appendChildren(parent, oInserted);
+	const isOverflow = await ctx.appendChildren(parent, oInserted);
 
-	if (isOverflow === Overflow.TRUE) {
+	if (isOverflow === Overflow.SELF) {
 		oInserted.dataset.overflow = Overflow.SELF;
-
 		return oInserted;
 	}
 
-	oInserted.dataset.overflow = await callbacks.renderChildren(elem, oInserted);
+	oInserted.dataset.overflow = await ctx.renderChildren(elem, oInserted);
 
 	return oInserted;
 }
@@ -134,23 +124,22 @@ export async function renderInserted(
 export async function renderDeleted(
 	elem: OpenXmlElement,
 	parent: HTMLElement,
-	callbacks: FieldsRendererCallbacks
+	ctx: RenderContext
 ): Promise<HTMLModElement> {
 	const oDeleted = createElement('del');
 
-	if (callbacks.renderChanges() === false) {
+	if (ctx.renderChanges() === false) {
 		oDeleted.style.display = 'none';
 	}
 
-	let isOverflow = await callbacks.appendChildren(parent, oDeleted);
+	const isOverflow = await ctx.appendChildren(parent, oDeleted);
 
-	if (isOverflow === Overflow.TRUE) {
+	if (isOverflow === Overflow.SELF) {
 		oDeleted.dataset.overflow = Overflow.SELF;
-
 		return oDeleted;
 	}
 
-	oDeleted.dataset.overflow = await callbacks.renderChildren(elem, oDeleted);
+	oDeleted.dataset.overflow = await ctx.renderChildren(elem, oDeleted);
 
 	return oDeleted;
 }
@@ -158,9 +147,9 @@ export async function renderDeleted(
 export async function renderDeletedText(
 	elem: WmlText,
 	parent: HTMLElement,
-	callbacks: FieldsRendererCallbacks
+	ctx: RenderContext
 ): Promise<Node> {
-	return callbacks.renderText(elem, parent);
+	return ctx.renderText(elem, parent);
 }
 
 export function renderCommentRangeStart(commentStart: WmlCommentRangeStart): Comment {
@@ -173,9 +162,9 @@ export function renderCommentRangeEnd(commentEnd: WmlCommentRangeStart): Comment
 
 export function renderCommentReference(
 	commentRef: WmlCommentReference,
-	callbacks: FieldsRendererCallbacks
+	ctx: RenderContext
 ): Comment {
-	const comment = callbacks.findComment(commentRef.id);
+	const comment = ctx.findComment(commentRef.id);
 
 	if (!comment) return null;
 

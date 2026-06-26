@@ -52,7 +52,7 @@ export async function renderTable(
 	// Overflow detection: insert the table into the parent first
 	let is_overflow: string;
 	is_overflow = await cbs.appendChildren(parent, oTable);
-	if (is_overflow === Overflow.TRUE) {
+	if (is_overflow === Overflow.SELF) {
 		oTable.dataset.overflow = Overflow.SELF;
 		return oTable;
 	}
@@ -101,7 +101,7 @@ export async function renderTableRow(
 	// Overflow detection: insert the row into the parent first
 	let is_overflow: string;
 	is_overflow = await cbs.appendChildren(parent, oTableRow);
-	if (is_overflow === Overflow.TRUE) {
+	if (is_overflow === Overflow.SELF) {
 		oTableRow.dataset.overflow = Overflow.SELF;
 		return oTableRow;
 	}
@@ -150,7 +150,7 @@ export async function renderTableCell(
 	// Overflow detection: insert the cell into the row first
 	let is_overflow: string;
 	is_overflow = await cbs.appendChildren(parent, oTableCell);
-	if (is_overflow === Overflow.TRUE) {
+	if (is_overflow === Overflow.SELF) {
 		oTableCell.dataset.overflow = Overflow.SELF;
 		return oTableCell;
 	}

@@ -1,6 +1,12 @@
 import { DomType, OpenXmlElement, WmlTableCell, WmlTableRow } from '@docx/ooxml/wordprocessingml/document/model/dom';
 import * as _ from 'lodash-es';
 
+/** Minimal shape required by splitElementsByBreakIndex. */
+export interface SplitTarget {
+	children: OpenXmlElement[];
+	breakIndex?: Set<number>;
+}
+
 function isSplitParagraph(elem: OpenXmlElement): boolean {
 	const { breakIndex, children } = elem;
 	if (!breakIndex) return false;
@@ -10,7 +16,7 @@ function isSplitParagraph(elem: OpenXmlElement): boolean {
 	return i < children.length;
 }
 
-export function splitElementsByBreakIndex(current: OpenXmlElement, next: OpenXmlElement): void {
+export function splitElementsByBreakIndex(current: SplitTarget, next: SplitTarget): void {
 	for (let i = 0; i < next?.children.length; i++) {
 		const child = next.children[i];
 		const { type, breakIndex, children } = child;
@@ -69,7 +75,8 @@ export function splitElementsByBreakIndex(current: OpenXmlElement, next: OpenXml
 		}
 
 		if (children.length > 0) {
-			splitElementsByBreakIndex(copy, child);
+			// copy.children is always set above in each switch case; `children` is child.children.
+			splitElementsByBreakIndex(copy as SplitTarget, { children, breakIndex: child.breakIndex });
 		}
 	}
 }

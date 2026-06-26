@@ -24,7 +24,7 @@ export function copyStyleProperties(
 	return output;
 }
 
-// 处理表格style样式
+/** Copy table-level cell styles down to individual cells. */
 export function processTable(table: WmlTable): void {
 	for (const r of table.children) {
 		for (const c of r.children) {
@@ -42,18 +42,31 @@ export function processTable(table: WmlTable): void {
 	}
 }
 
-// 递归明确元素parent父级关系
+/**
+ * Walk the element tree and propagate table cell styles.
+ * Parent links must already be set (via linkParents) before rendering.
+ */
 export function processElement(element: OpenXmlElement): void {
 	if (element.children) {
 		for (const e of element.children) {
-			e.parent = element;
-			e.level = element?.level + 1;
-			if (e.type == DomType.Table) {
+			if (e.type === DomType.Table) {
 				processTable(e as WmlTable);
-				processElement(e);
-			} else {
-				processElement(e);
 			}
+			processElement(e);
+		}
+	}
+}
+
+/**
+ * Walk the element tree and set parent references on every child.
+ * Call this once after an element tree is constructed or re-assembled
+ * (e.g. after parsing or after an overflow split).
+ */
+export function linkParents(element: OpenXmlElement): void {
+	if (element.children) {
+		for (const e of element.children) {
+			e.parent = element;
+			linkParents(e);
 		}
 	}
 }

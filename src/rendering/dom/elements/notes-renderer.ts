@@ -1,12 +1,7 @@
 import { DomType, OpenXmlElement, WmlNoteReference } from '@docx/ooxml/wordprocessingml/document/model/dom';
 import { WmlBaseNote, WmlFootnotes, WmlEndnotes } from '@docx/ooxml/wordprocessingml/parts/notes/elements';
 import { createElement } from '@docx/rendering/dom/core/dom-utils';
-
-// Callbacks to the main renderer for notes rendering
-export interface NotesRendererCallbacks {
-	processElement(elem: OpenXmlElement): void;
-	renderChildren(elem: OpenXmlElement, parent: HTMLElement): Promise<string>;
-}
+import type { RenderContext } from '@docx/rendering/render-context';
 
 // Render a footnotes or endnotes list into the page element
 export async function renderNotes(
@@ -14,7 +9,7 @@ export async function renderNotes(
 	noteIds: string[],
 	notesMap: Record<string, WmlBaseNote>,
 	parent: HTMLElement,
-	cbs: NotesRendererCallbacks
+	ctx: RenderContext
 ): Promise<void> {
 	// Gather only the notes that appear on this page
 	const children: WmlBaseNote[] = noteIds.map(id => notesMap[id]).filter(x => x);
@@ -23,10 +18,11 @@ export async function renderNotes(
 		// Build a synthetic container element
 		const notes = type === DomType.Footnotes ? new WmlFootnotes() : new WmlEndnotes();
 		notes.children = children;
-		// Re-establish parent relationships for the notes tree
-		cbs.processElement(notes);
+		// Establish parent links and apply table style propagation
+		ctx.linkParents(notes);
+		ctx.processElement(notes);
 		// Render each note as an <li>
-		await cbs.renderChildren(notes, oList);
+		await ctx.renderChildren(notes, oList);
 		parent.appendChild(oList);
 	}
 }

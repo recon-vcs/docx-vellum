@@ -1,9 +1,9 @@
 import { OpenXmlElement } from '@docx/ooxml/wordprocessingml/document/model/dom';
 import { Page, PageProps } from './page';
 import { SectionProperties } from '@docx/ooxml/wordprocessingml/document/model/section';
-import { LayoutRegion, PhysicalPage } from '@docx/rendering/pagination/model/layout-region';
+import { LayoutRegion } from '@docx/rendering/pagination/model/layout-region';
 import { PageLayoutContext } from '@docx/rendering/pagination/model/page-numbering';
-import { splitElementsByBreakIndex } from './split-by-break';
+import { SplitTarget, splitElementsByBreakIndex } from './split-by-break';
 
 export interface PageSplitResult {
 	updatedCurrentPage: Page;
@@ -46,21 +46,6 @@ function buildContext(
 	};
 }
 
-function buildPhysicalPage(
-	regions: LayoutRegion[] | undefined,
-	context: PageLayoutContext | undefined,
-): PhysicalPage | undefined {
-	if (!regions || !context) {
-		return undefined;
-	}
-
-	return {
-		regions,
-		pageNumber: context.physicalPageNumber,
-		sectionPageIndexes: new Map([[context.sectionId, context.sectionPageIndex]]),
-	};
-}
-
 function makeNextPage(
 	currentPage: Page,
 	pageIndex: number,
@@ -76,7 +61,6 @@ function makeNextPage(
 		children: nextChildren,
 		regions: nextRegions,
 		layoutContext,
-		physicalPage: buildPhysicalPage(nextRegions, layoutContext),
 	} as PageProps);
 }
 
@@ -124,18 +108,11 @@ export function splitRegionOnOverflow(
 		children: region.children.slice(overflowIndex),
 	};
 
-	const currentWrapper = new Page({
-		sectProps: currentRegion.section,
-		children: currentRegion.children,
-	} as PageProps);
-	const nextWrapper = new Page({
-		sectProps: nextRegion.section,
-		children: nextRegion.children,
-	} as PageProps);
-
-	splitElementsByBreakIndex(currentWrapper, nextWrapper);
-	currentRegion.children = currentWrapper.children;
-	nextRegion.children = nextWrapper.children;
+	const currentSplit: SplitTarget = { children: currentRegion.children, breakIndex: currentPage.breakIndex };
+	const nextSplit: SplitTarget = { children: nextRegion.children };
+	splitElementsByBreakIndex(currentSplit, nextSplit);
+	currentRegion.children = currentSplit.children;
+	nextRegion.children = nextSplit.children;
 
 	const currentRegions = [
 		...regions.slice(0, regionIndex),
@@ -158,9 +135,6 @@ export function splitRegionOnOverflow(
 	);
 
 	currentPage.isSplit = true;
-	currentPage.physicalPage = currentPage.layoutContext
-		? buildPhysicalPage(currentRegions, currentPage.layoutContext)
-		: currentPage.physicalPage;
 	pages[pageIndex] = currentPage;
 	pages.splice(pageIndex + 1, 0, nextPage);
 

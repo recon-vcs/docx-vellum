@@ -2,7 +2,6 @@ import { SectionType } from '@docx/ooxml/wordprocessingml/document/model/section
 
 export enum DomType {
 	Document = "document",
-	Page = "page",
 	Paragraph = "paragraph",
 	Run = "run",
 	Break = "break",
@@ -118,13 +117,10 @@ export interface OpenXmlElement {
 	children?: OpenXmlElement[];
 	cssStyle?: Record<string, any>;
 	props?: Record<string, any>;
-	level?: number;
-	index?: number;
 	breakIndex?: Set<number>;
 	styleName?: string;
 	className?: string;
 	parent?: OpenXmlElement;
-	sourcePath?: string;
 }
 
 export abstract class OpenXmlElementBase implements OpenXmlElement {
@@ -132,12 +128,9 @@ export abstract class OpenXmlElementBase implements OpenXmlElement {
 	children?: OpenXmlElement[] = [];
 	cssStyle?: Record<string, any> = {};
 	props?: Record<string, any>;
-	level?: number;
-	index?: number;
 	breakIndex?: Set<number>;
 	styleName?: string;
 	className?: string;
-	sourcePath?: string;
 	parent?: OpenXmlElement;
 }
 

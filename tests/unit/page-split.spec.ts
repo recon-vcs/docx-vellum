@@ -13,7 +13,7 @@ function paragraph(name: string): OpenXmlElement {
 	return {
 		type: DomType.Paragraph,
 		children: [],
-		sourcePath: name,
+		uuid: name,
 	};
 }
 

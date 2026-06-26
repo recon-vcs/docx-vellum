@@ -1,28 +1,16 @@
 import { BaseHeaderFooterPart } from '@docx/ooxml/wordprocessingml/parts/header-footer/parts';
-import { Part } from '@docx/opc/parts/part';
-import { WordDocument } from '@docx/word-document';
 import { DomType, OpenXmlElement } from '@docx/ooxml/wordprocessingml/model/element';
 import { FooterHeaderReference, SectionProperties } from '@docx/ooxml/wordprocessingml/document/model/section';
 import { selectHeaderFooterReference } from '@docx/rendering/pagination/context/header-footer-context';
 import { PageLayoutContext } from '@docx/rendering/pagination/model/page-numbering';
 import { createElement } from '@docx/rendering/dom/core/dom-utils';
-
-export interface PageRendererCallbacks {
-	document: WordDocument;
-	ignoreWidth: boolean;
-	ignoreHeight: boolean;
-	evenAndOddHeaders: boolean;
-	usedHeaderFooterParts: string[];
-	setCurrentPart(part: Part | null): void;
-	processElement(elem: OpenXmlElement): void;
-	renderHeaderFooter(elem: OpenXmlElement, tagName: keyof HTMLElementTagNameMap, parent: HTMLElement): Promise<HTMLElement>;
-}
+import type { RenderContext } from '@docx/rendering/render-context';
 
 export function createPage(
 	className: string,
 	props: SectionProperties,
 	wrapper: HTMLElement,
-	options: Pick<PageRendererCallbacks, 'ignoreWidth' | 'ignoreHeight'>
+	options: Pick<RenderContext, 'ignoreWidth' | 'ignoreHeight'>
 ): HTMLElement {
 	const oPage = createElement('section', { className });
 
@@ -73,7 +61,7 @@ export async function renderHeaderFooterRef(
 	isFirstPage: boolean,
 	layoutContext: PageLayoutContext | undefined,
 	parent: HTMLElement,
-	callbacks: PageRendererCallbacks
+	ctx: RenderContext
 ): Promise<HTMLElement | null> {
 	if (!refs) {
 		return null;
@@ -82,7 +70,7 @@ export async function renderHeaderFooterRef(
 	const ref = selectHeaderFooterReference(refs, {
 		titlePage: props.titlePage,
 		isFirstSectionPage: layoutContext?.isFirstSectionPage ?? isFirstPage,
-		evenAndOddHeaders: callbacks.evenAndOddHeaders,
+		evenAndOddHeaders: ctx.evenAndOddHeaders,
 		isEvenPage: layoutContext?.isEvenPage ?? (pageIndex + 1) % 2 === 0,
 	});
 
@@ -91,17 +79,18 @@ export async function renderHeaderFooterRef(
 		return null;
 	}
 
-	const part = callbacks.document.findPartByRelId(ref.id, callbacks.document.documentPart) as BaseHeaderFooterPart;
+	const part = ctx.document.findPartByRelId(ref.id, ctx.document.documentPart) as BaseHeaderFooterPart;
 	if (!part) {
 		console.error(`Part corresponding to the reference with id:${ref.id} is not found`);
 		return null;
 	}
 
-	callbacks.setCurrentPart(part);
+	ctx.setCurrentPart(part);
 
-	if (!callbacks.usedHeaderFooterParts.includes(part.path)) {
-		callbacks.processElement(part.rootElement);
-		callbacks.usedHeaderFooterParts.push(part.path);
+	if (!ctx.usedHeaderFooterParts.includes(part.path)) {
+		ctx.linkParents(part.rootElement);
+		ctx.processElement(part.rootElement);
+		ctx.usedHeaderFooterParts.push(part.path);
 	}
 
 	let oElement: HTMLElement = null;
@@ -112,7 +101,7 @@ export async function renderHeaderFooterRef(
 				'padding-top': props.pageMargins.header,
 				width: props.contentSize?.width,
 			};
-			oElement = await callbacks.renderHeaderFooter(part.rootElement, 'header', parent);
+			oElement = await ctx.renderHeaderFooter(part.rootElement, 'header', parent);
 			break;
 		case DomType.Footer:
 			part.rootElement.cssStyle = {
@@ -120,13 +109,13 @@ export async function renderHeaderFooterRef(
 				'padding-bottom': props.pageMargins.footer,
 				width: props.contentSize?.width,
 			};
-			oElement = await callbacks.renderHeaderFooter(part.rootElement, 'footer', parent);
+			oElement = await ctx.renderHeaderFooter(part.rootElement, 'footer', parent);
 			break;
 		default:
 			console.warn('set header/footer style error', part.rootElement.type);
 			break;
 	}
 
-	callbacks.setCurrentPart(null);
+	ctx.setCurrentPart(null);
 	return oElement;
 }
