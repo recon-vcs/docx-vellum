@@ -11,14 +11,18 @@
     "preview"
   ],
   "author": {
-    "name": "recon-vcs"
+    "name": "stasshe"
   },
   "maintainers": [
-    "recon-vcs"
+    "stasshe"
   ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/recon-vcs/docx-renderer.git"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "type": "module",
   "main": "./dist/docx-renderer.cjs",
