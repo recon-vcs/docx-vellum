@@ -1,4 +1,5 @@
 import { OpenXmlElement, DomType } from '../model/element';
+import { measureElementOverflow } from '../measure/overflow-measurer';
 
 // Overflow states for page-break detection
 export enum Overflow {
@@ -155,13 +156,7 @@ export function appendComment(elem: HTMLElement, comment: string): void {
 
 // Check whether a content element has scrolled past its visible height
 export function checkOverflow(el: HTMLElement): boolean {
-	const current_overflow: string = getComputedStyle(el).overflow;
-	if (!current_overflow || current_overflow === 'visible') {
-		el.style.overflow = 'hidden';
-	}
-	const is_overflow: boolean = el.clientHeight < el.scrollHeight;
-	el.style.overflow = current_overflow;
-	return is_overflow;
+	return measureElementOverflow(el);
 }
 
 // Walk up the parent chain to find the nearest ancestor of a given DomType

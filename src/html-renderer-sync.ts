@@ -5,18 +5,16 @@ import { Options } from './docx-preview';
 import { DocumentElement } from './document/document';
 import { WmlParagraph } from './document/paragraph';
 import * as _ from 'lodash-es';
-import { asArray, escapeClassName, uuid } from './utils';
 import { computePointToPixelRatio, updateTabStop } from './javascript';
 import { FontTablePart } from './font-table/font-table';
-import { FooterHeaderReference, SectionProperties, SectionType } from './document/section';
-import { Page, PageProps, TreeNode } from './document/page';
+import { FooterHeaderReference, SectionProperties } from './document/section';
+import { Page, PageProps } from './document/page';
 import { RunProperties, WmlRun } from './document/run';
 import { WmlBookmarkStart } from './document/bookmarks';
-import { WmlFieldChar, WmlFieldSimple, WmlInstructionText } from './document/fields';
-import { IDomStyle, Ruleset } from './document/style';
+import { WmlFieldSimple } from './document/fields';
+import { IDomStyle } from './document/style';
 import { WmlBaseNote, WmlEndnote, WmlEndnotes, WmlFootnote, WmlFootnotes } from './notes/elements';
 import { ThemePart } from './theme/theme-part';
-import { BaseHeaderFooterPart } from './header-footer/parts';
 import { Part } from './common/part';
 import { VmlElement } from './vml/vml';
 import { WmlCommentRangeStart, WmlCommentReference } from './comments/elements';
@@ -29,6 +27,12 @@ import { MathRendererCallbacks, mathJustificationToTextAlign, renderMmlMathParag
 import { DrawingRenderContext, createKonva as createKonvaFn, renderDrawing as renderDrawingFn, renderImage as renderImageFn, renderShape as renderShapeFn, renderVmlElement as renderVmlElementFn, renderVmlPicture as renderVmlPictureFn } from './render/drawing-renderer';
 import { renderHeaderFooter as renderHeaderFooterFn } from './render/header-footer-renderer';
 import { InlineRendererCallbacks, renderCharacter as renderCharacterFn, renderHyperlink as renderHyperlinkFn, renderParagraph as renderParagraphFn, renderRun as renderRunFn, renderText as renderTextFn } from './render/inline-renderer';
+import { FieldsRendererCallbacks, renderBookmarkStart as renderBookmarkStartFn, renderCommentRangeEnd as renderCommentRangeEndFn, renderCommentRangeStart as renderCommentRangeStartFn, renderCommentReference as renderCommentReferenceFn, renderDeleted as renderDeletedFn, renderDeletedText as renderDeletedTextFn, renderInserted as renderInsertedFn, resolveFieldRuns as resolveFieldRunsFn, resolveSimpleField as resolveSimpleFieldFn } from './render/fields-renderer';
+import { renderDefaultStyle as renderDefaultStyleFn, renderWrapper as renderWrapperFn } from './render/styles/default-styles';
+import { processStyleName as processStyleNameFn, processStyles as processStylesFn, renderFontTable as renderFontTableFn, renderStyles as renderStylesFn, renderTheme as renderThemeFn } from './render/styles/document-styles';
+import { levelTextToContent as levelTextToContentFn, numberingClass as numberingClassFn, numberingCounter as numberingCounterFn, numFormatToCssValue as numFormatToCssValueFn, processNumberings as processNumberingsFn, renderNumbering as renderNumberingFn, styleToString as styleToStringFn } from './render/styles/numbering-styles';
+import { PageRendererCallbacks, createPage as createPageFn, createPageContent as createPageContentFn, renderHeaderFooterRef as renderHeaderFooterRefFn } from './render/page-renderer';
+import { splitDocumentIntoPhysicalPages } from './layout/modern-page-splitter';
 
 const ns = {
 	html: 'http://www.w3.org/1999/xhtml',
@@ -199,388 +203,95 @@ export class HtmlRendererSync {
 		});
 	}
 
-	// 渲染默认样式
+	// Render built-in default styles.
 	renderDefaultStyle() {
-		const c = this.className;
-		const styleText = `
-			.${c} { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", "Liberation Sans", Arial, sans-serif }
-			.${c}-wrapper { background: gray; padding: 30px; padding-bottom: 0px; display: flex; flex-flow: column; align-items: center; line-height:normal; font-weight:normal; } 
-			.${c}-wrapper>section.${c} { background: white; box-shadow: 0 0 10px rgba(0, 0, 0, 0.5); margin-bottom: 30px; }
-			.${c} { color: black; hyphens: auto; text-underline-position: from-font; }
-			section.${c} { box-sizing: border-box; display: flex; flex-flow: column nowrap; position: relative; overflow: hidden; }
-            section.${c}>header { position: absolute; top: 0; z-index: 1; display: flex; flex-direction: column; justify-content: flex-end; }
-			section.${c}>article { z-index: 1; }
-			section.${c}>footer { position: absolute; bottom: 0; z-index: 1; }
-			.${c} table { border-collapse: collapse; break-inside: avoid; }
-			.${c} table td, .${c} table th { vertical-align: top; }
-			.${c} p { margin: 0pt; min-height: 1em; }
-			.${c} span { white-space: pre-wrap; overflow-wrap: break-word; }
-			.${c} math { vertical-align: middle; }
-			.${c} .${c}-math-paragraph { break-inside: avoid; }
-			.${c} .${c}-math-paragraph math { display: inline-block; max-width: 100%; }
-			.${c} a { color: inherit; text-decoration: inherit; }
-			.${c} img, ${c} svg { vertical-align: baseline; }
-			.${c} svg { fill: transparent; break-inside: avoid; }
-			.${c} .clearfix::after { content: ""; display: block; line-height: 0; clear: both; }
-			.${c} br.break.column { break-after: column; }
-			.${c} s.break.section { display: block; }
-			.${c} s.break.section[data-type="nextColumn"] { break-before: column; }
-		`;
-
-		return createStyleElement(styleText);
+		return renderDefaultStyleFn(this.className);
 	}
 
-	// 文档CSS主题样式
+	// Render document theme CSS variables.
 	renderTheme(themePart: ThemePart, styleContainer: HTMLElement) {
-		const variables = {};
-		const fontScheme = themePart.theme?.fontScheme;
-
-		if (fontScheme) {
-			if (fontScheme.majorFont) {
-				variables['--docx-majorHAnsi-font'] = fontScheme.majorFont.latinTypeface;
-			}
-
-			if (fontScheme.minorFont) {
-				variables['--docx-minorHAnsi-font'] = fontScheme.minorFont.latinTypeface;
-			}
-		}
-
-		const colorScheme = themePart.theme?.colorScheme;
-
-		if (colorScheme) {
-			for (const [k, v] of Object.entries(colorScheme.colors)) {
-				variables[`--docx-${k}-color`] = `#${v}`;
-			}
-		}
-
-		const cssText = this.styleToString(`.${this.className}`, variables);
-		styleContainer.appendChild(createStyleElement(cssText));
+		renderThemeFn(themePart, styleContainer, this.documentStylesCallbacks());
 	}
 
-	// 计算className，小写，默认前缀："docx_"
+	// Build a CSS class name for a Word style.
 	processStyleName(className: string): string {
-		return className ? `${this.className}_${escapeClassName(className)}` : this.className;
+		return processStyleNameFn(className, this.className);
 	}
 
-	// 处理样式继承，合并样式规则
-	// 在styles中，某一个样式baseOn依赖的styleId一定排在其前面，样式的继承关系是自上而下的，所以，只需要遍历一次，就可以完成所有样式的继承
+	// Merge inherited style rules. Base styles are ordered before dependent styles.
 	processStyles(styles: IDomStyle[]) {
-		// 根据id生成style集合
-		let stylesMap = _.keyBy(styles, 'id');
-		// 遍历依赖关系,合并其样式规则
-		for (const childStyle of styles) {
-			// 生成其className
-			childStyle.cssName = this.processStyleName(childStyle.id);
-			// 跳过基础Base样式
-			if (childStyle.basedOn === null) {
-				continue;
-			}
-			// 查询其所依赖的父级style
-			const parentStyle = stylesMap[childStyle.basedOn];
-
-			if (parentStyle) {
-				// 深度合并父级的段落、Run属性
-				if (parentStyle?.paragraphProps) {
-					childStyle.paragraphProps = _.merge({}, parentStyle?.paragraphProps, childStyle.paragraphProps);
-				}
-				if (parentStyle?.runProps) {
-					childStyle.runProps = _.merge({}, parentStyle?.runProps, childStyle.runProps);
-				}
-				// 遍历父级的样式规则
-				for (let parentRuleset of parentStyle.rulesets) {
-					// 根据target查找子级的样式规则
-					let childRuleset: Ruleset = childStyle.rulesets.find(r => r.target == parentRuleset.target);
-
-					if (childRuleset) {
-						// 存在，深度合并，子级覆盖父级的样式规则
-						childRuleset.declarations = _.merge({}, parentRuleset.declarations, childRuleset.declarations);
-					} else {
-						// 不存在，尾部添加
-						childStyle.rulesets.push({ ...parentRuleset });
-					}
-				}
-			} else if (this.options.debug) {
-				console.warn(`Can't find base style ${childStyle.basedOn}`);
-			}
-		}
-
-		return stylesMap;
+		return processStylesFn(styles, this.documentStylesCallbacks());
 	}
 
-	// 生成style样式
+	// Render document style rules.
 	renderStyles(styles: IDomStyle[]): HTMLElement {
-		let styleText = "";
-		for (const style of styles) {
-			// TODO 处理链接样式:linked，注意两者互相链接，互相引用
-
-			for (const ruleset of style.rulesets) {
-				//TODO temporary disable modifier until test it well
-				let selector = `${style.label ?? ''}.${style.cssName}`; //${subStyle.mod ?? ''}
-				// 样式目标不匹配，追加子级元素样式目标
-				if (style.label !== ruleset.target) {
-					selector += ` ${ruleset.target}`;
-				}
-				// 处理默认样式
-				if (style.isDefault) {
-					selector = `.${this.className} ${style.label}, ` + selector;
-				}
-
-				styleText += this.styleToString(selector, ruleset.declarations);
-			}
-		}
-
-		return createStyleElement(styleText);
+		return renderStylesFn(styles, this.documentStylesCallbacks());
 	}
 
 	processNumberings(numberings: IDomNumbering[]) {
-		for (const num of numberings.filter(n => n.pStyleName)) {
-			const style = this.findStyle(num.pStyleName);
-
-			if (style?.paragraphProps?.numbering) {
-				style.paragraphProps.numbering.level = num.level;
-			}
-		}
+		processNumberingsFn(numberings, this.numberingStylesCallbacks());
 	}
 
 	renderNumbering(numberings: IDomNumbering[], styleContainer: HTMLElement) {
-		let styleText = '';
-		const resetCounters = [];
-
-		for (const num of numberings) {
-			const selector = `p.${this.numberingClass(num.id, num.level)}`;
-			let listStyleType = 'none';
-
-			if (num.bullet) {
-				const valiable = `--${this.className}-${num.bullet.src}`.toLowerCase();
-
-				styleText += this.styleToString(`${selector}:before`, {
-					"content": "' '",
-					"display": "inline-block",
-					"background": `var(${valiable})`
-				}, num.bullet.style);
-
-				this.document.loadNumberingImage(num.bullet.src).then(data => {
-					const text = `${this.rootSelector} { ${valiable}: url(${data}) }`;
-					styleContainer.appendChild(createStyleElement(text));
-				});
-			} else if (num.levelText) {
-				const counter = this.numberingCounter(num.id, num.level);
-				const counterReset = counter + ' ' + (num.start - 1);
-				if (num.level > 0) {
-					styleText += this.styleToString(`p.${this.numberingClass(num.id, num.level - 1)}`, {
-						"counter-reset": counterReset
-					});
-				}
-				// reset all level counters with start value
-				resetCounters.push(counterReset);
-
-				styleText += this.styleToString(`${selector}:before`, {
-					"content": this.levelTextToContent(num.levelText, num.suff, num.id, this.numFormatToCssValue(num.format)),
-					"counter-increment": counter,
-					...num.rStyle,
-				});
-			} else {
-				listStyleType = this.numFormatToCssValue(num.format);
-			}
-
-			styleText += this.styleToString(selector, {
-				display: 'list-item',
-				'list-style-position': 'inside',
-				'list-style-type': listStyleType,
-				...num.pStyle,
-			});
-		}
-
-		if (resetCounters.length > 0) {
-			styleText += this.styleToString(this.rootSelector, {
-				'counter-reset': resetCounters.join(' '),
-			});
-		}
-
-		return createStyleElement(styleText);
+		return renderNumberingFn(numberings, styleContainer, this.numberingStylesCallbacks());
 	}
 
 	numberingClass(id: string, lvl: number) {
-		return `${this.className}-num-${id}-${lvl}`;
+		return numberingClassFn(this.className, id, lvl);
 	}
 
 	styleToString(selectors: string, declarations: Record<string, string>, cssText: string = null) {
-		let result = `${selectors} {\r\n`;
-
-		for (const key in declarations) {
-			if (key.startsWith('$')) {
-				continue;
-			}
-
-			result += `  ${key}: ${declarations[key]};\r\n`;
-		}
-
-		if (cssText) {
-			result += cssText;
-		}
-
-		return result + '}\r\n';
+		return styleToStringFn(selectors, declarations, cssText);
 	}
 
 	numberingCounter(id: string, lvl: number) {
-		return `${this.className}-num-${id}-${lvl}`;
+		return numberingCounterFn(this.className, id, lvl);
 	}
 
 	levelTextToContent(text: string, suff: string, id: string, numformat: string) {
-		const suffMap = {
-			tab: '\\9',
-			space: '\\a0',
-		};
-
-		const result = text.replace(/%\d*/g, s => {
-			const lvl = parseInt(s.substring(1), 10) - 1;
-			return `"counter(${this.numberingCounter(id, lvl)}, ${numformat})"`;
-		});
-
-		return `"${result}${suffMap[suff] ?? ''}"`;
+		return levelTextToContentFn(text, suff, id, numformat, (counterId, level) => this.numberingCounter(counterId, level));
 	}
 
 	numFormatToCssValue(format: string) {
-		const mapping = {
-			none: 'none',
-			bullet: 'disc',
-			decimal: 'decimal',
-			lowerLetter: 'lower-alpha',
-			upperLetter: 'upper-alpha',
-			lowerRoman: 'lower-roman',
-			upperRoman: 'upper-roman',
-			decimalZero: 'decimal-leading-zero', // 01,02,03,...
-			// ordinal: "", // 1st, 2nd, 3rd,...
-			// ordinalText: "", //First, Second, Third, ...
-			// cardinalText: "", //One,Two Three,...
-			// numberInDash: "", //-1-,-2-,-3-, ...
-			// hex: "upper-hexadecimal",
-			aiueo: 'katakana',
-			aiueoFullWidth: 'katakana',
-			chineseCounting: 'simp-chinese-informal',
-			chineseCountingThousand: 'simp-chinese-informal',
-			chineseLegalSimplified: 'simp-chinese-formal', // 中文大写
-			chosung: 'hangul-consonant',
-			ideographDigital: 'cjk-ideographic',
-			ideographTraditional: 'cjk-heavenly-stem', // 十天干
-			ideographLegalTraditional: 'trad-chinese-formal',
-			ideographZodiac: 'cjk-earthly-branch', // 十二地支
-			iroha: 'katakana-iroha',
-			irohaFullWidth: 'katakana-iroha',
-			japaneseCounting: 'japanese-informal',
-			japaneseDigitalTenThousand: 'cjk-decimal',
-			japaneseLegal: 'japanese-formal',
-			thaiNumbers: 'thai',
-			koreanCounting: 'korean-hangul-formal',
-			koreanDigital: 'korean-hangul-formal',
-			koreanDigital2: 'korean-hanja-informal',
-			hebrew1: 'hebrew',
-			hebrew2: 'hebrew',
-			hindiNumbers: 'devanagari',
-			ganada: 'hangul',
-			taiwaneseCounting: 'cjk-ideographic',
-			taiwaneseCountingThousand: 'cjk-ideographic',
-			taiwaneseDigital: 'cjk-decimal',
-		};
-
-		return mapping[format] ?? format;
+		return numFormatToCssValueFn(format);
 	}
 
-	// renderNumbering2(numberingPart: NumberingPartProperties, container: HTMLElement): HTMLElement {
-	//     let css = "";
-	//     let numberingMap = keyBy(numberingPart.abstractNumberings, x => x.id);
-	//     let bulletMap = keyBy(numberingPart.bulletPictures, x => x.id);
-	//     let topCounters = [];
-	//
-	//     for(let num of numberingPart.numberings) {
-	//         let absNum = numberingMap[num.abstractId];
-	//
-	//         for(let lvl of absNum.levels) {
-	//             let className = this.numberingClass(num.id, lvl.level);
-	//             let listStyleType = "none";
-	//
-	//             if(lvl.text && lvl.format == 'decimal') {
-	//                 let counter = this.numberingCounter(num.id, lvl.level);
-	//
-	//                 if (lvl.level > 0) {
-	//                     css += this.styleToString(`p.${this.numberingClass(num.id, lvl.level - 1)}`, {
-	//                         "counter-reset": counter
-	//                     });
-	//                 } else {
-	//                     topCounters.push(counter);
-	//                 }
-	//
-	//                 css += this.styleToString(`p.${className}:before`, {
-	//                     "content": this.levelTextToContent(lvl.text, num.id),
-	//                     "counter-increment": counter
-	//                 });
-	//             } else if(lvl.bulletPictureId) {
-	//                 let pict = bulletMap[lvl.bulletPictureId];
-	//                 let variable = `--${this.className}-${pict.referenceId}`.toLowerCase();
-	//
-	//                 css += this.styleToString(`p.${className}:before`, {
-	//                     "content": "' '",
-	//                     "display": "inline-block",
-	//                     "background": `var(${variable})`
-	//                 }, pict.style);
-	//
-	//                 this.document.loadNumberingImage(pict.referenceId).then(data => {
-	//                     var text = `.${this.className}-wrapper { ${variable}: url(${data}) }`;
-	//                     container.appendChild(createStyleElement(text));
-	//                 });
-	//             } else {
-	//                 listStyleType = this.numFormatToCssValue(lvl.format);
-	//             }
-	//
-	//             css += this.styleToString(`p.${className}`, {
-	//                 "display": "list-item",
-	//                 "list-style-position": "inside",
-	//                 "list-style-type": listStyleType,
-	//                 //TODO
-	//                 //...num.style
-	//             });
-	//         }
-	//     }
-	//
-	//     if (topCounters.length > 0) {
-	//         css += this.styleToString(`.${this.className}-wrapper`, {
-	//             "counter-reset": topCounters.join(" ")
-	//         });
-	//     }
-	//
-	//     return createStyleElement(css);
-	// }
-
-	// 字体列表CSS样式
+	// Render embedded font-face rules.
 	renderFontTable(fontsPart: FontTablePart, styleContainer: HTMLElement) {
-		for (const f of fontsPart.fonts) {
-			for (const ref of f.embedFontRefs) {
-				this.document.loadFont(ref.id, ref.key).then(fontData => {
-					const cssValues = {
-						'font-family': f.name,
-						src: `url(${fontData})`,
-					};
-
-					if (ref.type == 'bold' || ref.type == 'boldItalic') {
-						cssValues['font-weight'] = 'bold';
-					}
-
-					if (ref.type == 'italic' || ref.type == 'boldItalic') {
-						cssValues['font-style'] = 'italic';
-					}
-
-					appendComment(styleContainer, `docxjs ${f.name} font`);
-					const cssText = this.styleToString('@font-face', cssValues);
-					styleContainer.appendChild(createStyleElement(cssText));
-					this.refreshTabStops();
-				});
-			}
-		}
+		renderFontTableFn(fontsPart, styleContainer, this.documentStylesCallbacks());
 	}
 
-	// 生成父级容器
+	// Render the optional wrapper container.
 	renderWrapper() {
-		return createElement('div', { className: `${this.className}-wrapper` });
+		return renderWrapperFn(this.className);
+	}
+
+	private documentStylesCallbacks() {
+		return {
+			className: this.className,
+			options: this.options,
+			styleToString: (selectors, declarations, cssText = null) => this.styleToString(selectors, declarations, cssText),
+			processStyleName: (className) => this.processStyleName(className),
+			createStyleElement: (cssText) => createStyleElement(cssText),
+			appendComment: (styleContainer, text) => appendComment(styleContainer, text),
+			loadFont: (id, key) => this.document.loadFont(id, key),
+			refreshTabStops: () => this.refreshTabStops(),
+		};
+	}
+
+	private numberingStylesCallbacks() {
+		return {
+			className: this.className,
+			rootSelector: this.rootSelector,
+			findStyle: (styleName) => this.findStyle(styleName),
+			styleToString: (selectors, declarations, cssText = null) => this.styleToString(selectors, declarations, cssText),
+			createStyleElement: (cssText) => createStyleElement(cssText),
+			loadNumberingImage: (src) => this.document.loadNumberingImage(src),
+			numberingClass: (id, level) => this.numberingClass(id, level),
+			numberingCounter: (id, level) => this.numberingCounter(id, level),
+			levelTextToContent: (text, suff, id, numformat) => this.levelTextToContent(text, suff, id, numformat),
+			numFormatToCssValue: (format) => this.numFormatToCssValue(format),
+		};
 	}
 
 	// 复制CSS样式
@@ -642,413 +353,20 @@ export class HtmlRendererSync {
 		}
 	}
 
-	/*
-	 * section与page概念区别
-	 * 章节(section)是根据内容的逻辑结构和组织来划分的，不同章节设置独立的格式。
-	 * 页面是文档实际呈现的物理单位，而章节则是逻辑上的分割点。
-	 */
-
-	// TODO 表格中也含有lastRenderedPageBreak，可以拆分表格
-	// 初次拆分，根据分页符号拆分页面
+	// Build physical pages from section regions and explicit break data.
 	splitPageBySymbol(documentElement: DocumentElement): Page[] {
-		// 深拷贝原始数据
-		let root: DocumentElement = _.cloneDeep(documentElement);
-		// 当前操作page，children数组包含子元素
-		let currentPage: Page = new Page({ isSplit: true } as PageProps);
-		// 拆分页面的结果集合
-		let pages: Page[] = [];
+		const split = splitDocumentIntoPhysicalPages(documentElement);
 
-		// 创建新的页面
-		function startNewPage() {
-			if (currentPage.children.length > 0) {
-				pages.push(currentPage);
-				currentPage = new Page({ isSplit: true } as PageProps);
-			}
-		}
+		return split.pages.map(physicalPage => {
+			const activeRegion = physicalPage.regions[physicalPage.regions.length - 1];
+			const children = physicalPage.regions.flatMap(region => region.children);
 
-		// 根据分页符号拆分段落
-		const splitElementsBySymbol = (el: TreeNode, ancestors: TreeNode[]) => {
-			// TODO 忽略元素类型集合，多个元素拆分失败
-			let ignoredElementTypes = new Set([DomType.BookmarkStart]);
-			// 节属性
-			if (el.type === DomType.Paragraph) {
-				// 查找内置默认段落样式
-				const default_paragraph_style = this.findStyle(el?.styleName);
-				// 检测段落内置样式是否存在段前分页
-				if (default_paragraph_style?.paragraphProps?.pageBreakBefore) {
-					// 去除当前段落
-					let paragraph = currentPage.stack.pop();
-					// 将当前break元素左侧所有元素作为page的子元素
-					currentPage.children = parseToTree(currentPage.stack);
-					// 开始新的Page
-					startNewPage();
-					// 重置段落prev
-					paragraph.prev = null;
-					// 将当前段落添加到下一页page中
-					currentPage.stack = [paragraph];
-					return;
-				}
-				// 节属性，代表分节符，包含页眉、页脚、页码、页边距等属性
-				const sectProps: SectionProperties = el.props?.sectionProperties;
-				// because of table or TOC exist, current page is not split
-				if (currentPage.isSplit === false && sectProps === undefined) {
-					return;
-				}
-				// 无论节属性是否存在，都需要添加到当前page中，后续将会从尾至头依次赋值节属性
-				currentPage.sectProps = sectProps;
-			}
-			// table
-			if (el.type === DomType.Table) {
-				// 仅当isSplit === true，则标记当前page：未拆分，需要渲染期进行拆分
-				if (currentPage.isSplit) {
-					currentPage.isSplit = false;
-				}
-			}
-			// TOC:table of content
-			if (el.type === DomType.Hyperlink) {
-				// 检测链接是否存在目录
-				const exist_TOC: boolean = (el as WmlHyperlink)?.href?.includes('Toc');
-				// 仅当isSplit === true，则标记当前page：未拆分，需要渲染期进行拆分
-				if (currentPage.isSplit && exist_TOC) {
-					currentPage.isSplit = false;
-				}
-			}
-			// lastRenderedPageBreak
-			if (el.type === DomType.LastRenderedPageBreak) {
-				if (currentPage.isSplit === false) {
-					return;
-				}
-				// 追溯其父级以及祖先元素，一直追溯至根节点；left：统计左侧相邻兄弟元素数量，remove：即将移除元素id的集合
-				let { left, removedElementIds, ignoredElementIds } = checkAncestors(el);
-				// 查找其祖先元素中的paragraph元素
-				let paragraph = ancestors.find(node => node.type === DomType.Paragraph);
-				// 判断是否拆分段落,注意忽略某些元素类型
-				let isSplitParagraph = currentPage.stack.some(node => {
-					// 段落子元素
-					if (node.parent.uuid === paragraph?.uuid) {
-						// 默认node.prev不存在
-						let isExist = false;
-						// 检测node是否存在prev元素
-						if (node.prev) {
-							// 检测prev元素是否忽略类型
-							let isIgnored = ignoredElementTypes.has(node.prev.type);
-							// prev元素不是忽略类型,存在prev兄弟元素
-							if (isIgnored === false) {
-								isExist = true;
-							}
-						}
-						return isExist;
-					}
-					return false;
-				});
-				// left数量 > 0，说明左侧存在元素，则生成新的page
-				if (left > 0) {
-					// 添加当前break元素id至移除集合
-					removedElementIds.push(el.uuid);
-					// 忽略元素集合
-					let ignoredElements = currentPage.stack.filter(node => ignoredElementIds.includes(node.uuid));
-					// 根据移除集合，删除元素
-					currentPage.stack = currentPage.stack.filter(node => !removedElementIds.includes(node.uuid));
-					// 将当前break元素左侧所有元素作为page的子元素
-					currentPage.children = parseToTree(currentPage.stack);
-					// 拆分元素
-					startNewPage();
-					// 忽略元素要重新在下一页生成，否则会丢失
-					currentPage.stack.push(...ignoredElements);
-					// 在下一页中生成lastRenderedPageBreak相关的元素
-					currentPage.stack.push(el);
-					// 将祖先元素添加入path集合
-					let extraAncestors = ancestors.map((ancestor: TreeNode) => {
-						let copy = _.cloneDeep(ancestor);
-						// 修改lastRenderedPageBreak的祖先元素prev指针为null
-						copy.prev = null;
-						// 段落拆分之后，下一页段落，重设缩进为0
-						if (copy.type === DomType.Paragraph && isSplitParagraph) {
-							copy.cssStyle['text-indent'] = '0'
-						}
-						return copy;
-					});
-					currentPage.stack.push(...extraAncestors);
-
-				}
-
-				/*
-				* 校验lastRenderedPageBreak所有祖先元素，
-				* 返回值：
-				* left:统计左侧相邻兄弟元素数量;
-				* removeElementIds:即将移除元素id的集合;
-				* ignoredElementIds:即将忽略元素id的集合;
-				* */
-				function checkAncestors(el: TreeNode) {
-					// 即将忽略元素id的集合
-					let ignoredElementIds: string[] = [];
-					// 即将移除元素id的集合
-					let removedElementIds: string[] = [];
-					// el左侧存在兄弟元素数量
-					let left: number = 0;
-					// 将el与ancestors合并为一个待处理元素数组
-					let processingElements = [el, ...ancestors];
-					// 子元素数据状态
-					let child = { ignoredType: null, uuid: null };
-					// 遍历祖先元素
-					for (let ancestor of processingElements) {
-						// 处理子元素中被忽略的元素
-						if (child.ignoredType) {
-							// 查找子元素的索引
-							let index = ancestor.children.findIndex(node => node.uuid === child.uuid);
-							// 切分数组
-							let prevElements = ancestor.children.slice(0, index);
-							// 倒序排列
-							prevElements.reverse();
-							// 查找忽略元素，可能存在多个，依次缓存其uuid
-							for (let element of prevElements) {
-								// 检测元素是否忽略类型
-								if (element.type === child.ignoredType) {
-									// 将忽略元素uuid添加入忽略元素集合
-									ignoredElementIds.push(element.uuid);
-									// 将忽略元素uuid添加入移除元素集合
-									removedElementIds.push(element.uuid);
-								} else {
-									// 排除忽略元素，左侧存在兄弟元素，则计数+1，终止递归
-									left += 1;
-									break;
-								}
-							}
-						}
-						// 将当前元素uuid赋值给child
-						child.uuid = ancestor.uuid;
-						// 检测ancestor是否存在prev元素
-						if (ancestor.prev) {
-							// 检测prev元素是否忽略
-							let isIgnored = ignoredElementTypes.has(ancestor.prev.type);
-							if (isIgnored) {
-								child.ignoredType = ancestor.prev.type;
-							} else {
-								// 存在兄弟元素，则计数+1，终止递归
-								left += 1;
-								break;
-							}
-						} else {
-							// prev元素不存在
-							child.ignoredType = null;
-							// 排除parentId = root的根节点
-							if (ancestor.parent.uuid !== root.uuid) {
-								// 将ancestor父级元素的id添加入移除集合
-								removedElementIds.push(ancestor.parent.uuid);
-							}
-						}
-					}
-					return { left, removedElementIds, ignoredElementIds };
-				}
-			}
-			// page break
-			if ((el as WmlBreak).break == BreakType.Page) {
-				// 将当前break元素左侧所有元素作为page的子元素
-				currentPage.children = parseToTree(currentPage.stack);
-				// 开始新的Page
-				startNewPage();
-			}
-			// section break
-			if (el.type === DomType.SectionBreak) {
-				let type = (el as WmlSectionBreak).break;
-				switch (type) {
-					// Continuous Section Break: stays on the same page by design
-					// (no startNewPage()). Known limitation: the new section's own
-					// pgSz/cols/margins still aren't applied mid-page since a page
-					// currently carries a single SectionProperties; that needs the
-					// multi-section-per-page layout model, not a local fix here.
-					case SectionType.Continuous:
-
-						break;
-
-					// Column Section Break: also stays on the same page. The
-					// column-advance itself is handled in CSS via
-					// `s.break.section[data-type="nextColumn"] { break-before: column; }`
-					// (see renderDefaultStyle), not here.
-					case SectionType.NextColumn:
-
-						break;
-
-					// Even Page Section Break.
-					case SectionType.EvenPage:
-					// Odd Page Section Break.
-					case SectionType.OddPage:
-					// Next Page Section Break.
-					case SectionType.NextPage:
-					default:
-						// 将当前break元素左侧所有元素作为page的子元素
-						currentPage.children = parseToTree(currentPage.stack);
-						// 开始新的Page
-						startNewPage();
-
-						break;
-				}
-			}
-		};
-		// 元组Tuple类型
-		type TreeTuple = [TreeNode, TreeNode[]];
-		// Stack：栈
-		let stack: TreeTuple[] = [];
-		// 将子元素压入栈
-		pushStack(root, []);
-		// 遍历路径
-		let path: TreeTuple[] = [];
-		// 循环条件，栈不为空
-		while (stack.length > 0) {
-			// 弹出栈顶元素
-			let [el, ancestors] = stack.pop();
-			// 增加SectionBreak分节符元素
-			if (el.type === DomType.Paragraph) {
-				// 节属性，代表分节符，包含页眉、页脚、页码、页边距等属性
-				const sectProps: SectionProperties = el.props?.sectionProperties;
-
-				if (sectProps) {
-					// 节属性生成唯一uuid，每一个节中page均是同一个uuid，代表属于同一个节
-					sectProps.sectionId = uuid();
-					// 此处添加的SectionBreak元素，应该是下一个节type类型，目前缓存当前节type类型，方便下面重新处理。
-					let wmlSectionBreak: WmlSectionBreak = {
-						type: DomType.SectionBreak,
-						break: sectProps.type ?? SectionType.NextPage,
-					}
-					// run element
-					let wmlRun: WmlRun = {
-						type: DomType.Run,
-						children: [wmlSectionBreak as OpenXmlElement]
-					};
-
-					el.children.push(wmlRun);
-				}
-			}
-			// 记录遍历路径
-			path.push([el, ancestors]);
-			// 如果该节点有子节点，将当前节点的子节点逆序压入栈，这样可以保证先遍历左子树，继续下一次循环
-			pushStack(el, ancestors);
-		}
-		// 分节符类型：默认为最后一个分节符类型
-		let prevSectionType: SectionType = root.sectProps.type ?? SectionType.NextPage;
-		// 处理SectionBreak元素类型,倒序设置
-		for (let i = path.length - 1; i >= 0; i--) {
-			// 获取当前元素
-			let [current] = path[i];
-			// 检测当前元素是否为SectionBreak元素
-			if (current.type === DomType.SectionBreak) {
-				// 下一节的类型
-				let { break: sectionType } = current as WmlSectionBreak;
-				// 设置前一节的类型
-				(current as WmlSectionBreak).break = prevSectionType;
-				// 缓存
-				prevSectionType = sectionType;
-			}
-		}
-		// 正序遍历path路径
-		for (let i = 0; i < path.length; i++) {
-			// 获取当前元素
-			let [node, ancestors] = path[i];
-			// 检测是否是当前Page第一个元素,重置其prev
-			if (currentPage.stack.length === 0) {
-				node.prev = null;
-			}
-			// 将当前元素缓存至当前页
-			currentPage.stack.push(node);
-			// 根据分页符号、分节符拆分页面
-			splitElementsBySymbol(node, ancestors);
-		}
-		// 剩余的元素作为最后一个page的子元素
-		if (currentPage.stack.length > 0) {
-			currentPage.isSplit = false;
-			currentPage.children = parseToTree([...currentPage.stack]);
-			// 最后一页的sectionProperties,来自root
-			currentPage.sectProps = root.sectProps;
-			pages.push(currentPage);
-		}
-
-		// 倒序压入栈
-		function pushStack(elem: TreeNode, ancestors: TreeNode[]) {
-			// 子元素
-			const len = elem?.children?.length ?? 0;
-			// 如果没有子元素，则直接返回
-			if (len === 0) {
-				return;
-			}
-			/*
-			* ignore Text element's children--Character that will be pushed to stack
-			* avoid too many elements in stack
-			* side effect:page.stack has no Character element
-			* */
-			if (elem.type === DomType.Text) {
-				return;
-			}
-			// 用于跟踪前一个兄弟节点,初始化前一个子元素为null
-			let nextChild: TreeNode | null = null;
-			// 遍历子节点（倒序），设置prev和next指针
-			for (let i = len - 1; i >= 0; i--) {
-				// 当前元素
-				const child = elem.children[i] as TreeNode;
-				// 生成元素UUID
-				child.uuid = uuid();
-				// 标识当前元素的父级
-				child.parent = { uuid: elem.uuid, type: elem.type };
-				// 如果不是最后一个节点，则设置下一个节点的prev指针
-				if (nextChild) {
-					nextChild.prev = { uuid: child.uuid, type: child.type };
-				}
-				// 如果是第一个节点，则设置当前节点的prev指针为null
-				if (i === 0) {
-					child.prev = null;
-				}
-				// 更新prevChild为当前节点，以便下一次迭代使用
-				nextChild = child;
-				// root根节点不能作为祖先节点
-				let childAncestors = elem.type === DomType.Document ? [] : [elem, ...ancestors];
-				// 压入栈
-				stack.push([child, childAncestors]);
-			}
-		}
-
-		// 将元素转换为树形结构，方便后续操作
-		function parseToTree(nodes: TreeNode[]) {
-			let firstLevel = nodes.filter((node: TreeNode) => node.parent.uuid === root.uuid);
-			// 转换函数
-			const parser = function (origin: TreeNode[], root: TreeNode[]) {
-				return root.map((parent: TreeNode) => {
-					let children: TreeNode[] = origin.filter((child: TreeNode) => child.parent.uuid === parent.uuid);
-					if (children.length) {
-						return { ...parent, children: parser(origin, children) }
-					} else {
-						return { ...parent }
-					}
-				});
-			}
-			return parser(nodes, firstLevel);
-		}
-
-		// 根据继承规则合并sectionProperties中的页眉页脚属性
-		let prevSectionProperties: SectionProperties = null;
-
-		for (let page of pages) {
-			if (page.sectProps) {
-				if (prevSectionProperties?.headerRefs) {
-					page.sectProps.headerRefs = _.unionBy(page.sectProps.headerRefs, prevSectionProperties.headerRefs, 'type');
-				}
-				if (prevSectionProperties?.footerRefs) {
-					page.sectProps.footerRefs = _.unionBy(page.sectProps.footerRefs, prevSectionProperties.footerRefs, 'type');
-				}
-				// cache current sectionProperties as prevSectionProps
-				prevSectionProperties = page.sectProps;
-			}
-		}
-		// 一个节可能分好几个页，但是节属性sectionProps存在当前节中最后一段对应的 paragraph 元素的子元素。即：[null,null,null,setPr];
-		let currentSectionProperties: SectionProperties = null;
-		// 倒序给每一页填充sectionProps，方便后期页面渲染
-		for (let i = pages.length - 1; i >= 0; i--) {
-			if (pages[i].sectProps == null) {
-				pages[i].sectProps = currentSectionProperties;
-			} else {
-				currentSectionProperties = pages[i].sectProps;
-			}
-		}
-
-		return pages;
+			return new Page({
+				isSplit: false,
+				sectProps: activeRegion?.section ?? documentElement.sectProps,
+				children,
+			} as PageProps);
+		});
 	}
 
 	// 生成所有的页面Page
@@ -1201,143 +519,36 @@ export class HtmlRendererSync {
 
 	// 创建Page
 	createPage(className: string, props: SectionProperties) {
-		const oPage = createElement('section', { className });
-
-		if (props) {
-			// 生成uuid标识，相同的uuid即属于同一个节
-			oPage.dataset.sectionId = props.sectionId;
-			// 页边距
-			if (props.pageMargins) {
-				oPage.style.paddingLeft = props.pageMargins.left;
-				oPage.style.paddingRight = props.pageMargins.right;
-				oPage.style.paddingTop = props.pageMargins.top;
-				oPage.style.paddingBottom = props.pageMargins.bottom;
-			}
-			// 页面尺寸
-			if (props.pageSize) {
-				if (!this.options.ignoreWidth) {
-					oPage.style.width = props.pageSize.width;
-				}
-				if (!this.options.ignoreHeight) {
-					oPage.style.minHeight = props.pageSize.height;
-				}
-			}
-		}
-		// 插入生成的page
-		this.wrapper.appendChild(oPage);
-
-		return oPage;
+		return createPageFn(className, props, this.wrapper, {
+			ignoreWidth: this.options.ignoreWidth,
+			ignoreHeight: this.options.ignoreHeight,
+		});
 	}
 
 	// TODO 分栏：一个页面可能存在多个章节section，每个section拥有不同的分栏
 	// 多列分栏布局
 	createPageContent(props: SectionProperties): HTMLElement {
-		// 指代页面page，HTML5缺少page，以article代替
-		const oArticle = createElement('article');
-		if (props.columns) {
-			const { count, space, separator } = props.columns;
-			// 设置多列样式
-			if (count > 1) {
-				oArticle.style.columnCount = `${count}`;
-				oArticle.style.columnGap = space;
-				// Word fills a column top-to-bottom before overflowing into the
-				// next one; the CSS default (`balance`) instead spreads content
-				// evenly across columns, squashing tables/shapes into the wrong
-				// column. `auto` matches Word's sequential-fill behavior.
-				oArticle.style.columnFill = 'auto';
-			}
-			// 分隔符，则添加分割线样式
-			if (separator) {
-				oArticle.style.columnRule = '1px solid black';
-			}
-		}
-
-		return oArticle;
+		return createPageContentFn(props);
 	}
 
 	// TODO 分页不准确，页脚页码混乱，
 	// TODO 支持奇数页偶数页不同页眉页脚
 	// 渲染页眉/页脚的Ref
 	async renderHeaderFooterRef(refs: FooterHeaderReference[], props: SectionProperties, pageIndex: number, isFirstPage: boolean, parent: HTMLElement) {
-		// Footer/Header References is null
-		if (!refs) {
-			return null;
-		}
-		// find Header/Footer Reference
-		let ref: FooterHeaderReference;
-		// title page
-		if (props.titlePage && isFirstPage) {
-			// 第一页
-			ref = refs.find(x => x.type == "first");
-		}
-		// 	Different Even/Odd Page Headers and Footers
-		else if (this.document.settingsPart.settings.evenAndOddHeaders) {
-			// By default,pageIndex start from number 1 in Word document, but pageIndex start from number 0 in Array.
-			// fix the above difference
-			pageIndex += 1;
+		return renderHeaderFooterRefFn(refs, props, pageIndex, isFirstPage, parent, this.pageRendererCallbacks());
+	}
 
-			if (pageIndex % 2 === 0) {
-				// even page
-				ref = refs.find(x => x.type === "even");
-			} else {
-				// odd page
-				ref = refs.find(x => x.type === "default" || x.type === "odd");
-			}
-		} else {
-			// default reference
-			ref = refs.find(x => x.type === "default");
-		}
-		// reference is not found
-		if (!ref) {
-			console.error("Header/Footer reference is not found");
-			return null;
-		}
-		// find the "part" corresponding to the "ref"：查找ref对应的part部分
-		let part = this.document.findPartByRelId(ref?.id, this.document.documentPart) as BaseHeaderFooterPart;
-		// part is not found
-		if (!part) {
-			console.error(`Part corresponding to the reference with id:${ref?.id} is not found`);
-			return null;
-		}
-		// cache current part
-		this.currentPart = part;
-		// check if the part has been used
-		let isUsed = this.usedHeaderFooterParts.includes(part.path);
-		if (isUsed === false) {
-			// 递归建立元素的parent父级关系
-			this.processElement(part.rootElement);
-			this.usedHeaderFooterParts.push(part.path);
-		}
-		// Header or Footer Element
-		let oElement: HTMLElement = null;
-		// 根据页眉页脚，设置CSS
-		switch (part.rootElement.type) {
-			case DomType.Header:
-				part.rootElement.cssStyle = {
-					left: props.pageMargins?.left,
-					'padding-top': props.pageMargins.header,
-					width: props.contentSize?.width,
-				};
-				// 渲染header元素
-				oElement = await this.renderHeaderFooter(part.rootElement, 'header', parent);
-				break;
-			case DomType.Footer:
-				part.rootElement.cssStyle = {
-					left: props.pageMargins?.left,
-					'padding-bottom': props.pageMargins.footer,
-					width: props.contentSize?.width,
-				};
-				// 渲染footer元素
-				oElement = await this.renderHeaderFooter(part.rootElement, 'footer', parent);
-				break;
-			default:
-				console.warn('set header/footer style error', part.rootElement.type);
-				break;
-		}
-		// 清空当前Part
-		this.currentPart = null;
-
-		return oElement;
+	private pageRendererCallbacks(): PageRendererCallbacks {
+		return {
+			document: this.document,
+			ignoreWidth: this.options.ignoreWidth,
+			ignoreHeight: this.options.ignoreHeight,
+			evenAndOddHeaders: this.document.settingsPart.settings.evenAndOddHeaders,
+			usedHeaderFooterParts: this.usedHeaderFooterParts,
+			setCurrentPart: part => { this.currentPart = part; },
+			processElement: elem => this.processElement(elem),
+			renderHeaderFooter: (elem, tagName, parent) => this.renderHeaderFooter(elem, tagName, parent),
+		};
 	}
 
 	// TODO 字体太大，尾注位置不对
@@ -2065,110 +1276,29 @@ export class HtmlRendererSync {
 		};
 	}
 
-	// Evaluates PAGE/NUMPAGES field codes in-place. Word stores these as a
-	// `w:fldChar begin` Run, one or more `w:instrText` Runs holding the field
-	// code (e.g. "PAGE \* MERGEFORMAT"), a `w:fldChar separate` Run, the
-	// last-saved cached result Run(s), then a `w:fldChar end` Run — all
-	// sibling Runs in the same paragraph. renderRun already hides the
-	// structural begin/instrText/separate/end Runs (elem.fieldRun), but the
-	// cached result Run was left untouched, so footers kept showing whatever
-	// page number Word had last saved instead of the page actually rendered.
-	// Field codes other than PAGE/NUMPAGES are left as Word's cached value.
 	resolveFieldRuns(runs: OpenXmlElement[]): OpenXmlElement[] {
-		const pages = this.document.documentPart.body.pages ?? [];
-		const pageNumber = pages.findIndex(p => p.pageId === this.currentPage.pageId) + 1;
-		const totalPages = pages.length;
-		const result: OpenXmlElement[] = [];
-		let i = 0;
-
-		while (i < runs.length) {
-			const run = runs[i] as WmlRun;
-			const beginChar = run.type === DomType.Run
-				&& run.children?.find(c => c.type === DomType.ComplexField) as WmlFieldChar;
-
-			if (!beginChar || beginChar.charType !== 'begin') {
-				result.push(run);
-				i++;
-				continue;
-			}
-			// collect the instruction text up to (and including) `separate`
-			let j = i + 1;
-			let instruction = '';
-			while (j < runs.length) {
-				const childRun = runs[j] as WmlRun;
-				const fieldChar = childRun.children?.find(c => c.type === DomType.ComplexField) as WmlFieldChar;
-				const instr = childRun.children?.find(c => c.type === DomType.Instruction) as WmlInstructionText;
-				if (instr) {
-					instruction += instr.text;
-				}
-				j++;
-				if (fieldChar?.charType === 'separate') {
-					break;
-				}
-			}
-			// the cached result Runs start here; scan ahead for `end`
-			const resultStart = j;
-			while (j < runs.length) {
-				const fieldChar = (runs[j] as WmlRun).children?.find(c => c.type === DomType.ComplexField) as WmlFieldChar;
-				if (fieldChar?.charType === 'end') {
-					break;
-				}
-				j++;
-			}
-			const endIndex = j;
-			const fieldName = instruction.trim().split(/\s+/)[0]?.toUpperCase();
-
-			if (fieldName === 'PAGE' || fieldName === 'NUMPAGES') {
-				const value = String(fieldName === 'PAGE' ? pageNumber : totalPages);
-				const template = (runs[resultStart] as WmlRun) ?? run;
-				// shallow-copy style only; cloneDeep would also walk
-				// `.parent` and drag in the whole ancestor tree (Paragraph,
-				// Body, ...) since OpenXmlElement is a parent<->children cycle.
-				const replacement: WmlRun = {
-					type: DomType.Run,
-					cssStyle: { ...template.cssStyle },
-					verticalAlign: template.verticalAlign,
-					parent: run.parent,
-					fieldRun: false,
-					children: [{ type: DomType.Text, text: value, children: [{ type: DomType.Character, char: value } as WmlCharacter] } as WmlText],
-				} as WmlRun;
-				this.processElement(replacement);
-				result.push(replacement);
-			} else {
-				// unsupported field code (DATE, REF, TOC, ...): keep as-is
-				result.push(...runs.slice(i, endIndex + 1));
-			}
-			i = endIndex + 1;
-		}
-
-		return result;
+		return resolveFieldRunsFn(runs, this.fieldsCallbacks());
 	}
 
-	// `w:fldSimple` carries the field code directly in `instr` and nests its
-	// cached display Run(s) as children. Same PAGE/NUMPAGES-only scope as
-	// resolveFieldRuns above.
 	resolveSimpleField(elem: WmlFieldSimple): OpenXmlElement[] {
-		const pages = this.document.documentPart.body.pages ?? [];
-		const pageNumber = pages.findIndex(p => p.pageId === this.currentPage.pageId) + 1;
-		const totalPages = pages.length;
-		const fieldName = elem.instruction?.trim().split(/\s+/)[0]?.toUpperCase();
+		return resolveSimpleFieldFn(elem, this.fieldsCallbacks());
+	}
 
-		if (fieldName !== 'PAGE' && fieldName !== 'NUMPAGES') {
-			return elem.children ?? [];
-		}
-
-		const value = String(fieldName === 'PAGE' ? pageNumber : totalPages);
-		const template = (elem.children?.[0] as WmlRun);
-		const replacement: WmlRun = {
-			type: DomType.Run,
-			cssStyle: { ...template?.cssStyle },
-			verticalAlign: template?.verticalAlign,
-			parent: elem.parent,
-			fieldRun: false,
-			children: [{ type: DomType.Text, text: value, children: [{ type: DomType.Character, char: value } as WmlCharacter] } as WmlText],
-		} as WmlRun;
-		this.processElement(replacement);
-		return [replacement];
+	private fieldsCallbacks(): FieldsRendererCallbacks {
+		return {
+			processElement: (e) => this.processElement(e),
+			renderChildren: (e, p) => this.renderChildren(e, p),
+			appendChildren: (p, c) => this.appendChildren(p, c),
+			appendChildrenWithoutOverflow: (p, c) => appendChildren(p, c),
+			renderText: (e, p) => this.renderText(e, p),
+			findComment: (id) => this.document.commentsPart?.commentMap[id],
+			currentPageNumber: () => {
+				const pages = this.document.documentPart.body.pages ?? [];
+				return pages.findIndex(p => p.pageId === this.currentPage.pageId) + 1;
+			},
+			pageCount: () => this.document.documentPart.body.pages?.length ?? 0,
+			renderChanges: () => this.options.renderChanges,
+		};
 	}
 
 	private inlineCallbacks(): InlineRendererCallbacks {
@@ -2281,14 +1411,7 @@ export class HtmlRendererSync {
 
 	// 渲染书签，主要用于定位，导航
 	renderBookmarkStart(elem: WmlBookmarkStart, parent: HTMLElement): HTMLElement {
-		const oSpan = createElement('span');
-		oSpan.id = elem.name;
-		// 作为子元素插入
-		appendChildren(parent, oSpan);
-		// 忽略溢出检测
-		oSpan.dataset.overflow = Overflow.IGNORE;
-
-		return oSpan;
+		return renderBookmarkStartFn(elem, parent, this.fieldsCallbacks());
 	}
 
 	// 渲染制表符
@@ -2403,77 +1526,32 @@ export class HtmlRendererSync {
 	// TODO 修订标识：修订人，修订日期等信息
 	// TODO 修订标识：表格
 	async renderInserted(elem: OpenXmlElement, parent: HTMLElement) {
-		// 根据option，是否渲染修订文本，确定tagName
-		let tagName: keyof HTMLElementTagNameMap = this.options.renderChanges ? 'ins' : 'span';
-		// 创建元素
-		const oInserted: HTMLModElement | HTMLSpanElement = createElement(tagName);
-		// 溢出标识
-		let is_overflow: Overflow;
-		// oInserted作为子元素插入,针对此元素进行溢出检测
-		is_overflow = await this.appendChildren(parent, oInserted);
-		if (is_overflow === Overflow.TRUE) {
-			oInserted.dataset.overflow = Overflow.SELF;
-
-			return oInserted;
-		}
-		// 针对oInserted后代子元素进行溢出检测
-		oInserted.dataset.overflow = await this.renderChildren(elem, oInserted);
-
-		return oInserted;
+		return renderInsertedFn(elem, parent, this.fieldsCallbacks());
 	}
 
 	// 渲染删除标记
 	async renderDeleted(elem: OpenXmlElement, parent: HTMLElement) {
-		let oDeleted = createElement('del');
-		// 根据option，是否渲染修订文本
-		if (this.options.renderChanges === false) {
-			// 隐藏修订文本
-			oDeleted.style.display = 'none';
-		}
-		// 溢出标识
-		let is_overflow: Overflow;
-		// oDeleted作为子元素插入,针对此元素进行溢出检测
-		is_overflow = await this.appendChildren(parent, oDeleted);
-
-		if (is_overflow === Overflow.TRUE) {
-			oDeleted.dataset.overflow = Overflow.SELF;
-
-			return oDeleted;
-		}
-		// 针对oDeleted后代子元素进行溢出检测
-		oDeleted.dataset.overflow = await this.renderChildren(elem, oDeleted);
-
-		return oDeleted;
+		return renderDeletedFn(elem, parent, this.fieldsCallbacks());
 	}
 
 	// 渲染删除文本
 	async renderDeletedText(elem: WmlText, parent: HTMLElement) {
-		// 根据option，是否渲染修订文本
-		if (this.options.renderChanges === false) {
-			// 隐藏修订文本
-		}
-		return this.renderText(elem, parent);
+		return renderDeletedTextFn(elem, parent, this.fieldsCallbacks());
 	}
 
 	// 注释开始
 	renderCommentRangeStart(commentStart: WmlCommentRangeStart) {
-		return document.createComment(`start of comment #${commentStart.id}`);
+		return renderCommentRangeStartFn(commentStart);
 	}
 
 	// 注释结束
 	renderCommentRangeEnd(commentEnd: WmlCommentRangeStart) {
-		return document.createComment(`end of comment #${commentEnd.id}`);
+		return renderCommentRangeEndFn(commentEnd);
 	}
 
 	// 注释
 	renderCommentReference(commentRef: WmlCommentReference) {
-		const comment = this.document.commentsPart?.commentMap[commentRef.id];
-
-		if (!comment) return null;
-
-		return document.createComment(
-			`comment #${comment.id} by ${comment.author} on ${comment.date}`
-		);
+		return renderCommentReferenceFn(commentRef, this.fieldsCallbacks());
 	}
 
 	// 渲染页眉页脚
