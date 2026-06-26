@@ -95,7 +95,7 @@ test.describe('section and break smoke', () => {
 		await renderInPage(page, 'section-break');
 
 		expect(pageErrors).toEqual([]);
-		const count = await page.locator('.section.docx').count();
+		const count = await page.locator('section.docx').count();
 		expect(count).toBeGreaterThanOrEqual(1);
 	});
 
