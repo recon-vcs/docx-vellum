@@ -33,6 +33,7 @@ import { processStyleName as processStyleNameFn, processStyles as processStylesF
 import { levelTextToContent as levelTextToContentFn, numberingClass as numberingClassFn, numberingCounter as numberingCounterFn, numFormatToCssValue as numFormatToCssValueFn, processNumberings as processNumberingsFn, renderNumbering as renderNumberingFn, styleToString as styleToStringFn } from './render/styles/numbering-styles';
 import { PageRendererCallbacks, createPage as createPageFn, createPageContent as createPageContentFn, renderHeaderFooterRef as renderHeaderFooterRefFn } from './render/page-renderer';
 import { splitDocumentIntoPhysicalPages } from './layout/modern-page-splitter';
+import { splitElementsByBreakIndex } from './render/split-by-break';
 
 const ns = {
 	html: 'http://www.w3.org/1999/xhtml',
@@ -365,6 +366,7 @@ export class HtmlRendererSync {
 				isSplit: false,
 				sectProps: activeRegion?.section ?? documentElement.sectProps,
 				children,
+				regions: physicalPage.regions,
 			} as PageProps);
 		});
 	}
@@ -408,112 +410,74 @@ export class HtmlRendererSync {
 		}
 	}
 
-	// 生成单个page，如果发现超出一页，递归拆分出下一个page
+	// Render a single page. If content overflows, recursively splits into the next page.
 	async renderPage() {
-		// 解构当前操作的page中的属性
-		const { pageId, sectProps, children, isFirstPage, isLastPage } = this.currentPage;
-		// 递归建立元素的parent父级关系
+		const { pageId, sectProps, children, isFirstPage, isLastPage, regions } = this.currentPage;
 		this.processElement(this.currentPage);
-		// 根据sectProps，创建page
 		const pageElement = this.createPage(this.className, sectProps);
 
-		// 给page添加背景样式
-		this.renderStyleValues(
-			this.document.documentPart.body.cssStyle,
-			pageElement
-		);
-		// 已拆分的Pages数组
-		let pages = this.document.documentPart.body.pages;
-		// 计算当前Page的索引
-		let pageIndex = pages.findIndex((page) => page.pageId === pageId);
-		// 页眉、页脚DOM
+		this.renderStyleValues(this.document.documentPart.body.cssStyle, pageElement);
+
+		const pages = this.document.documentPart.body.pages;
+		const pageIndex = pages.findIndex((page) => page.pageId === pageId);
+
 		let oHeader: HTMLElement = null;
 		let oFooter: HTMLElement = null;
-		// 渲染page页眉
 		if (this.options.renderHeaders) {
-			oHeader = await this.renderHeaderFooterRef(
-				sectProps.headerRefs,
-				sectProps,
-				pageIndex,
-				isFirstPage,
-				pageElement
-			);
+			oHeader = await this.renderHeaderFooterRef(sectProps.headerRefs, sectProps, pageIndex, isFirstPage, pageElement);
 		}
-		// 渲染page页脚
 		if (this.options.renderFooters) {
-			oFooter = await this.renderHeaderFooterRef(
-				sectProps.footerRefs,
-				sectProps,
-				pageIndex,
-				isFirstPage,
-				pageElement
-			);
+			oFooter = await this.renderHeaderFooterRef(sectProps.footerRefs, sectProps, pageIndex, isFirstPage, pageElement);
 		}
-		// TODO 分栏情况下，有可能一个page一种分栏，在分节符（continuous）情况下，一个page拥有多种分栏；
 
-		// page内容区---Article元素
-		const contentElement = this.createPageContent(sectProps);
-		// get element's offsetHeight, convert to point unit
-		let getOffsetHeight = (element: HTMLElement) => {
-			let height = element?.offsetHeight ?? 0;
-			// convert to point unit
-			return height * this.pointToPixelRatio;
-		}
-		// Header、Footer can affect the page height，it's need to be calculated
-		let { pageSize, pageMargins } = sectProps;
-		// header height
-		let headerHeight = getOffsetHeight(oHeader);
-		// footer height
-		let footerHeight = getOffsetHeight(oFooter);
-		// actual top must be maximum of pageMargins.top and headerHeight
-		let actualTop = _.max([parseFloat(pageMargins.top), headerHeight]);
-		// actual bottom must be maximum of pageMargins.bottom and footerHeight
-		let actualBottom = _.max([parseFloat(pageMargins.bottom), footerHeight]);
-		// change pageElement's top and bottom
+		const getOffsetHeight = (el: HTMLElement) => (el?.offsetHeight ?? 0) * this.pointToPixelRatio;
+		const { pageSize, pageMargins } = sectProps;
+		const headerHeight = getOffsetHeight(oHeader);
+		const footerHeight = getOffsetHeight(oFooter);
+		const actualTop = _.max([parseFloat(pageMargins.top), headerHeight]);
+		const actualBottom = _.max([parseFloat(pageMargins.bottom), footerHeight]);
 		pageElement.style.paddingTop = `${actualTop}pt`;
 		pageElement.style.paddingBottom = `${actualBottom}pt`;
-		// set the contentElement's height based on options.breakPages.
-		if (this.options.breakPages) {
-			// break pages,set fixed height
-			contentElement.style.height = `${parseFloat(pageSize.height) - actualTop - actualBottom}pt`;
-		} else {
-			// not break pages,set min height
-			contentElement.style.minHeight = `${parseFloat(pageSize.height) - actualTop - actualBottom}pt`;
-		}
-		// 缓存当前操作的Article元素
-		this.currentPage.contentElement = contentElement;
-		// 将Article插入page
-		pageElement.appendChild(contentElement);
-		// 标识--开启溢出计算
-		this.currentPage.checkingOverflow = true;
-		// 生成article内容
-		let is_overflow = await this.renderElements(children, contentElement);
-		// 元素没有溢出Page
-		if (is_overflow === Overflow.FALSE) {
-			// 修改当前Page的状态
+		const contentHeight = parseFloat(pageSize.height) - actualTop - actualBottom;
+
+		if (regions && regions.length > 1) {
+			// Multi-region page: continuous section changes within one physical page.
+			// Each region gets its own article with region-specific column layout.
+			// Overflow detection is skipped; pre-computed layout is used as-is.
+			for (const region of regions) {
+				const regionArticle = this.createPageContent(region.section);
+				regionArticle.style.minHeight = `${contentHeight}pt`;
+				pageElement.appendChild(regionArticle);
+				this.currentPage.contentElement = regionArticle;
+				this.currentPage.checkingOverflow = false;
+				await this.renderElements(region.children, regionArticle);
+			}
 			this.currentPage.isSplit = true;
-			// 替换当前page
 			pages[pageIndex] = this.currentPage;
+		} else {
+			// Single-region page: standard overflow detection path.
+			const contentElement = this.createPageContent(sectProps);
+			if (this.options.breakPages) {
+				contentElement.style.height = `${contentHeight}pt`;
+			} else {
+				contentElement.style.minHeight = `${contentHeight}pt`;
+			}
+			this.currentPage.contentElement = contentElement;
+			pageElement.appendChild(contentElement);
+			this.currentPage.checkingOverflow = true;
+			const is_overflow = await this.renderElements(children, contentElement);
+			if (is_overflow === Overflow.FALSE) {
+				this.currentPage.isSplit = true;
+				pages[pageIndex] = this.currentPage;
+			}
+			this.currentPage.checkingOverflow = false;
 		}
-		// 标识--结束溢出计算
-		this.currentPage.checkingOverflow = false;
-		// TODO 渲染page脚注，不应该插入PageElement中
+
 		if (this.options.renderFootnotes) {
-			await this.renderNotes(
-				DomType.Footnotes,
-				this.currentFootnoteIds,
-				this.footnoteMap,
-				pageElement
-			);
+			await this.renderNotes(DomType.Footnotes, this.currentFootnoteIds, this.footnoteMap, pageElement);
 		}
-		// TODO 渲染page尾注，判断最后一页，不应该插入PageElement中
 		if (this.options.renderEndnotes && isLastPage) {
-			await this.renderNotes(
-				DomType.Endnotes,
-				this.currentEndnoteIds,
-				this.endnoteMap,
-				pageElement
-			);
+			await this.renderNotes(DomType.Endnotes, this.currentEndnoteIds, this.endnoteMap, pageElement);
 		}
 	}
 
@@ -650,8 +614,7 @@ export class HtmlRendererSync {
 				let next_page_children: OpenXmlElement[] = current_page_children.splice(i);
 				// 生成新的page，新Page的sectionProps沿用前一页的sectionProps
 				const next_page: Page = new Page({ sectProps, children: next_page_children } as PageProps);
-				// 根据breakIndex索引拆分页面
-				this.splitElementsByBreakIndex(this.currentPage, next_page);
+				splitElementsByBreakIndex(this.currentPage, next_page);
 				// 修改当前Page的状态
 				this.currentPage.isSplit = true;
 				this.currentPage.checkingOverflow = false;
@@ -714,151 +677,6 @@ export class HtmlRendererSync {
 		return Overflow.UNKNOWN;
 	}
 
-	// 根据breakIndex索引拆分页面
-	splitElementsByBreakIndex(current: OpenXmlElement, next: OpenXmlElement) {
-		// 遍历下一个页面的元素
-		for (let i = 0; i < next?.children.length; i++) {
-			let child = next.children[i];
-			let { type, breakIndex, children } = child;
-			// 尚未渲染，未执行溢出检测的元素，breakIndex = undefined，跳过
-			if (!breakIndex) {
-				continue;
-			}
-			// 末端元素，无需拆分，跳过
-			if (!children || children?.length === 0) {
-				continue;
-			}
-			// 复制child的元素,后续缓存至current中
-			let copy: OpenXmlElement = _.cloneDeepWith(child, (value, key) => {
-				if (key === 'parent') {
-					return null;
-				}
-			});
-			/*
-			* breakIndex索引前面的元素，并未导致溢出，splice切出这些元素，
-			* 切出的元素作为children，复制父级属性，生成新的元素，
-			* 未溢出的元素，放入current_page中
-			* breakIndex索引后面的元素，已经溢出，存在于next_page;
-			* */
-
-			/*
-			* 未溢出的元素，全体未溢出：breakIndex = []，部分溢出：breakIndex = [1]
-			* 根据溢出索引，确定切除的元素数量
-			* */
-			let count = breakIndex.size > 0 ? [...breakIndex][0] : children.length;
-
-			switch (type) {
-				// 如果当前元素是表格Table
-				case DomType.Table:
-					let table_headers: WmlTableRow[] = [];
-					// 查找表格中的table header，可能有多行
-					table_headers = children.filter((row: WmlTableRow) => row.isHeader);
-					// 切除未溢出的元素,剩余的溢出元素，归属于next
-					const unbrokenChildren = children.splice(0, count);
-					// change verticalMerge attribute，restart merge region.
-					children[0].children.forEach((cell: WmlTableCell) => {
-						if (cell.verticalMerge === 'continue') {
-							cell.verticalMerge = 'restart'
-						}
-					});
-					/*
-					* 仅当table_headers.length在(0,children.length)范围内，在next中填充table header。
-					* 注意，用户误操作导致tr全是tableHeader，导致死循环。
-					* */
-					if (table_headers.length > 0 && table_headers.length < children.length) {
-						children.unshift(...table_headers);
-					}
-					// 未溢出的子元素覆盖copy
-					// 注意，必须修改copy,否则影响下一次递归
-					copy.children = unbrokenChildren;
-					// current指向原来的父级，push未溢出的元素至current
-					current.children.push(copy);
-
-					break;
-
-				// 表格Row
-				case DomType.Row:
-					// 排除table header
-					if ((child as WmlTableRow)?.isHeader) {
-						continue;
-					}
-					// 无需拆分，复制Row至current
-					current.children.push(copy);
-
-					break;
-
-				// 如果当前元素是表格Cell
-				case DomType.Cell:
-					/*
-					* 切出未溢出的元素,逐个替换current中cell的子元素
-					* 剩余的溢出元素，归属于next
-					* 注意，必须修改copy,否则影响下一次递归
-					* */
-					copy.children = children.splice(0, count);
-					current.children[i] = copy;
-
-					break;
-
-				case DomType.Paragraph:
-					// 判断是否拆分段落
-					let isSplitParagraph = isSplit(child);
-					/*
-					* 切出未溢出的元素
-					* 剩余的溢出元素，归属于next
-					* 注意，必须修改copy,否则影响下一次递归
-					* */
-					copy.children = children.splice(0, count);
-					// current指向原来的父级，push未溢出的元素至current
-					current.children.push(copy);
-					// 段落拆分之后，下一页段落，重设缩进为0
-					if (isSplitParagraph) {
-						child.cssStyle['text-indent'] = '0'
-					}
-					break;
-
-				default:
-					/*
-					* 切出未溢出的元素
-					* 剩余的溢出元素，归属于next
-					* 注意，必须修改copy,否则影响下一次递归
-					* */
-					copy.children = children.splice(0, count);
-					// current指向原来的父级，push未溢出的元素至current
-					current.children.push(copy);
-			}
-			// 重置breakIndex
-			if (type !== DomType.Row && breakIndex.size > 0) {
-				child.breakIndex = undefined;
-			}
-			// 递归调用，继续拆分
-			if (children.length > 0) {
-				this.splitElementsByBreakIndex(copy, child);
-			}
-		}
-
-		// 判断是否拆分段落--递归
-		function isSplit(elem: OpenXmlElement) {
-			let { breakIndex, children, type } = elem;
-			// 尚未渲染，未执行溢出检测的元素，breakIndex = undefined，跳过
-			if (!breakIndex) {
-				return false;
-			}
-			// 末端元素，无需拆分，跳过
-			if (!children || children?.length === 0) {
-				return false;
-			}
-			let i = [...breakIndex][0];
-			// 第一个元素溢出，其子元素需递归校验是否拆分段落
-			if (i === 0) {
-				return isSplit(children[i]);
-			}
-			// 溢出索引小于children长度，说明溢出
-			if (i < children.length) {
-				return true;
-			}
-		}
-	}
-
 	// 根据XML对象渲染单个元素
 	async renderElement(elem: OpenXmlElement, parent?: HTMLElement | Element | Text): Promise<Node_DOM> {
 		let oNode;
@@ -907,19 +725,19 @@ export class HtmlRendererSync {
 				break;
 
 			case DomType.Drawing:
-				oNode = await this.renderDrawing(elem as WmlDrawing, parent as HTMLElement);
+				oNode = await renderDrawingFn(elem as WmlDrawing, parent as HTMLElement, this.drawingRenderContext());
 				break;
 
 			case DomType.Image:
-				oNode = await this.renderImage(elem as WmlImage, parent as HTMLElement);
+				oNode = await renderImageFn(elem as WmlImage, parent as HTMLElement, this.drawingRenderContext());
 				break;
 
 			case DomType.Shape:
-				oNode = await this.renderShape(elem, parent as HTMLElement);
+				oNode = await renderShapeFn(elem, parent as HTMLElement, this.drawingRenderContext());
 				break;
 
 			case DomType.BookmarkStart:
-				oNode = this.renderBookmarkStart(elem as WmlBookmarkStart, parent as HTMLElement);
+				oNode = renderBookmarkStartFn(elem as WmlBookmarkStart, parent as HTMLElement, this.fieldsCallbacks());
 				break;
 
 			case DomType.BookmarkEnd:
@@ -948,15 +766,15 @@ export class HtmlRendererSync {
 				break;
 
 			case DomType.Inserted:
-				oNode = await this.renderInserted(elem, parent as HTMLElement);
+				oNode = await renderInsertedFn(elem, parent as HTMLElement, this.fieldsCallbacks());
 				break;
 
 			case DomType.Deleted:
-				oNode = await this.renderDeleted(elem, parent as HTMLElement);
+				oNode = await renderDeletedFn(elem, parent as HTMLElement, this.fieldsCallbacks());
 				break;
 
 			case DomType.DeletedText:
-				oNode = await this.renderDeletedText(elem as WmlText, parent as HTMLElement);
+				oNode = await renderDeletedTextFn(elem as WmlText, parent as HTMLElement, this.fieldsCallbacks());
 				break;
 
 			case DomType.NoBreakHyphen:
@@ -967,27 +785,18 @@ export class HtmlRendererSync {
 				break;
 
 			case DomType.CommentRangeStart:
-				oNode = this.renderCommentRangeStart(elem);
-				// 作为子元素插入,忽略溢出检测
-				if (parent) {
-					appendChildren(parent, oNode);
-				}
+				oNode = renderCommentRangeStartFn(elem as WmlCommentRangeStart);
+				if (parent) appendChildren(parent, oNode);
 				break;
 
 			case DomType.CommentRangeEnd:
-				oNode = this.renderCommentRangeEnd(elem);
-				// 作为子元素插入,忽略溢出检测
-				if (parent) {
-					appendChildren(parent, oNode);
-				}
+				oNode = renderCommentRangeEndFn(elem as WmlCommentRangeStart);
+				if (parent) appendChildren(parent, oNode);
 				break;
 
 			case DomType.CommentReference:
-				oNode = this.renderCommentReference(elem);
-				// 作为子元素插入,忽略溢出检测
-				if (parent) {
-					appendChildren(parent, oNode);
-				}
+				oNode = renderCommentReferenceFn(elem as WmlCommentReference, this.fieldsCallbacks());
+				if (parent) appendChildren(parent, oNode);
 				break;
 
 			case DomType.Footer:
@@ -1008,31 +817,22 @@ export class HtmlRendererSync {
 				break;
 
 			case DomType.FootnoteReference:
-				oNode = this.renderFootnoteReference(elem as WmlNoteReference);
-				// 作为子元素插入,忽略溢出检测
-				if (parent) {
-					appendChildren(parent, oNode);
-				}
+				oNode = renderFootnoteReferenceFn(elem as WmlNoteReference, this.currentFootnoteIds);
+				if (parent) appendChildren(parent, oNode);
 				break;
 
 			case DomType.EndnoteReference:
-				oNode = this.renderEndnoteReference(elem as WmlNoteReference);
-				// 作为子元素插入,忽略溢出检测
-				if (parent) {
-					appendChildren(parent, oNode);
-				}
+				oNode = renderEndnoteReferenceFn(elem as WmlNoteReference, this.currentEndnoteIds);
+				if (parent) appendChildren(parent, oNode);
 				break;
 
 			case DomType.VmlElement:
-				oNode = await this.renderVmlElement(elem as VmlElement, parent as HTMLElement);
+				oNode = await renderVmlElementFn(elem as VmlElement, parent as HTMLElement, this.drawingRenderContext());
 				break;
 
 			case DomType.VmlPicture:
-				oNode = await this.renderVmlPicture(elem);
-				// 作为子元素插入,忽略溢出检测
-				if (parent) {
-					appendChildren(parent, oNode);
-				}
+				oNode = await renderVmlPictureFn(elem, this.drawingRenderContext());
+				if (parent) appendChildren(parent, oNode);
 				break;
 
 			case DomType.MmlMath:
@@ -1046,11 +846,8 @@ export class HtmlRendererSync {
 				break;
 
 			case DomType.MmlMathParagraph:
-				oNode = await this.renderMmlMathParagraph(elem);
-				// 作为子元素插入,忽略溢出检测
-				if (parent) {
-					appendChildren(parent, oNode);
-				}
+				oNode = await renderMmlMathParagraphFn(elem, this.mathCallbacks());
+				if (parent) appendChildren(parent, oNode);
 				break;
 
 			case DomType.MmlFraction:
@@ -1082,11 +879,8 @@ export class HtmlRendererSync {
 				break;
 
 			case DomType.MmlGroupChar:
-				oNode = await this.renderMmlGroupChar(elem);
-				// 作为子元素插入,忽略溢出检测
-				if (parent) {
-					appendChildren(parent, oNode);
-				}
+				oNode = await renderMmlGroupCharFn(elem, this.mathCallbacks());
+				if (parent) appendChildren(parent, oNode);
 				break;
 
 			case DomType.MmlLimitLower:
@@ -1114,11 +908,8 @@ export class HtmlRendererSync {
 				break;
 
 			case DomType.MmlRadical:
-				oNode = await this.renderMmlRadical(elem);
-				// 作为子元素插入,忽略溢出检测
-				if (parent) {
-					appendChildren(parent, oNode);
-				}
+				oNode = await renderMmlRadicalFn(elem, this.mathCallbacks());
+				if (parent) appendChildren(parent, oNode);
 				break;
 
 			case DomType.MmlSuperscript:
@@ -1156,51 +947,35 @@ export class HtmlRendererSync {
 				break;
 
 			case DomType.MmlDelimiter:
-				oNode = await this.renderMmlDelimiter(elem);
-				// 作为子元素插入,忽略溢出检测
-				if (parent) {
-					appendChildren(parent, oNode);
-				}
+				oNode = await renderMmlDelimiterFn(elem, this.mathCallbacks());
+				if (parent) appendChildren(parent, oNode);
 				break;
 
 			case DomType.MmlRun:
-				oNode = await this.renderMmlRun(elem);
-				// 作为子元素插入,忽略溢出检测
-				if (parent) {
-					appendChildren(parent, oNode);
-				}
+				oNode = await renderMmlRunFn(elem, this.mathCallbacks());
+				if (parent) appendChildren(parent, oNode);
 				break;
 
 			case DomType.MmlNary:
-				oNode = await this.renderMmlNary(elem);
-				// 作为子元素插入,忽略溢出检测
-				if (parent) {
-					appendChildren(parent, oNode);
-				}
+				oNode = await renderMmlNaryFn(elem, this.mathCallbacks());
+				if (parent) appendChildren(parent, oNode);
 				break;
 
 			case DomType.MmlPreSubSuper:
-				oNode = await this.renderMmlPreSubSuper(elem);
-				// 作为子元素插入,忽略溢出检测
+				oNode = await renderMmlPreSubSuperFn(elem, this.mathCallbacks());
 				if (parent) {
 					appendChildren(parent, oNode);
 				}
 				break;
 
 			case DomType.MmlBar:
-				oNode = await this.renderMmlBar(elem);
-				// 作为子元素插入,忽略溢出检测
-				if (parent) {
-					appendChildren(parent, oNode);
-				}
+				oNode = await renderMmlBarFn(elem, this.mathCallbacks());
+				if (parent) appendChildren(parent, oNode);
 				break;
 
 			case DomType.MmlEquationArray:
-				oNode = await this.renderMllList(elem);
-				// 作为子元素插入,忽略溢出检测
-				if (parent) {
-					appendChildren(parent, oNode);
-				}
+				oNode = await renderMllListFn(elem, this.mathCallbacks());
+				if (parent) appendChildren(parent, oNode);
 				break;
 		}
 		// 标记其XML标签名
@@ -1254,10 +1029,6 @@ export class HtmlRendererSync {
 		const parent = createElementNS(ns, tagName as any, props);
 		await this.renderChildren(elem, parent);
 		return parent;
-	}
-
-	async renderMmlMathParagraph(elem: OpenXmlElement) {
-		return renderMmlMathParagraphFn(elem, this.mathCallbacks());
 	}
 
 	mathJustificationToTextAlign(justification?: string) {
@@ -1374,21 +1145,6 @@ export class HtmlRendererSync {
 		return renderHyperlinkFn(elem, parent, this.inlineCallbacks());
 	}
 
-	async renderDrawing(elem: WmlDrawing, parent: HTMLElement) {
-		return renderDrawingFn(elem, parent, this.drawingRenderContext());
-	}
-
-	// 渲染图片，默认转换blob--异步
-	async renderImage(elem: WmlImage, parent: HTMLElement) {
-		return renderImageFn(elem, parent, this.drawingRenderContext());
-	}
-
-	// 渲染DrawingML图形（预制几何形状，如矩形、箭头、"禁止"标记等）
-	async renderShape(elem: OpenXmlElement, parent: HTMLElement) {
-		return renderShapeFn(elem, parent, this.drawingRenderContext());
-	}
-
-	// 生成Konva框架--元素
 	renderKonva() {
 		const { stage, layer } = createKonvaFn(this.bodyContainer);
 		this.konva_stage = stage;
@@ -1407,11 +1163,6 @@ export class HtmlRendererSync {
 			renderElement: (e, p) => this.renderElement(e, p),
 			renderStyleValues: (s, o) => this.renderStyleValues(s, o),
 		};
-	}
-
-	// 渲染书签，主要用于定位，导航
-	renderBookmarkStart(elem: WmlBookmarkStart, parent: HTMLElement): HTMLElement {
-		return renderBookmarkStartFn(elem, parent, this.fieldsCallbacks());
 	}
 
 	// 渲染制表符
@@ -1523,37 +1274,6 @@ export class HtmlRendererSync {
 		return oSectionBreak;
 	}
 
-	// TODO 修订标识：修订人，修订日期等信息
-	// TODO 修订标识：表格
-	async renderInserted(elem: OpenXmlElement, parent: HTMLElement) {
-		return renderInsertedFn(elem, parent, this.fieldsCallbacks());
-	}
-
-	// 渲染删除标记
-	async renderDeleted(elem: OpenXmlElement, parent: HTMLElement) {
-		return renderDeletedFn(elem, parent, this.fieldsCallbacks());
-	}
-
-	// 渲染删除文本
-	async renderDeletedText(elem: WmlText, parent: HTMLElement) {
-		return renderDeletedTextFn(elem, parent, this.fieldsCallbacks());
-	}
-
-	// 注释开始
-	renderCommentRangeStart(commentStart: WmlCommentRangeStart) {
-		return renderCommentRangeStartFn(commentStart);
-	}
-
-	// 注释结束
-	renderCommentRangeEnd(commentEnd: WmlCommentRangeStart) {
-		return renderCommentRangeEndFn(commentEnd);
-	}
-
-	// 注释
-	renderCommentReference(commentRef: WmlCommentReference) {
-		return renderCommentReferenceFn(commentRef, this.fieldsCallbacks());
-	}
-
 	// 渲染页眉页脚
 	async renderHeaderFooter(elem: OpenXmlElement, tagName: keyof HTMLElementTagNameMap, parent: HTMLElement) {
 		return renderHeaderFooterFn(elem, tagName, parent, {
@@ -1562,56 +1282,6 @@ export class HtmlRendererSync {
 		});
 	}
 
-	// 渲染脚注
-	renderFootnoteReference(elem: WmlNoteReference) {
-		return renderFootnoteReferenceFn(elem, this.currentFootnoteIds);
-	}
-
-	// 渲染尾注
-	renderEndnoteReference(elem: WmlNoteReference) {
-		return renderEndnoteReferenceFn(elem, this.currentEndnoteIds);
-	}
-
-	async renderVmlElement(elem: VmlElement, parent?: HTMLElement): Promise<SVGElement> {
-		return renderVmlElementFn(elem, parent, this.drawingRenderContext());
-	}
-
-	// 渲染VML中图片
-	async renderVmlPicture(elem: OpenXmlElement) {
-		return renderVmlPictureFn(elem, this.drawingRenderContext());
-	}
-
-	async renderMmlRadical(elem: OpenXmlElement) {
-		return renderMmlRadicalFn(elem, this.mathCallbacks());
-	}
-
-	async renderMmlDelimiter(elem: OpenXmlElement) {
-		return renderMmlDelimiterFn(elem, this.mathCallbacks());
-	}
-
-	async renderMmlNary(elem: OpenXmlElement) {
-		return renderMmlNaryFn(elem, this.mathCallbacks());
-	}
-
-	async renderMmlPreSubSuper(elem: OpenXmlElement) {
-		return renderMmlPreSubSuperFn(elem, this.mathCallbacks());
-	}
-
-	async renderMmlGroupChar(elem: OpenXmlElement) {
-		return renderMmlGroupCharFn(elem, this.mathCallbacks());
-	}
-
-	async renderMmlBar(elem: OpenXmlElement) {
-		return renderMmlBarFn(elem, this.mathCallbacks());
-	}
-
-	async renderMmlRun(elem: OpenXmlElement) {
-		return renderMmlRunFn(elem, this.mathCallbacks());
-	}
-
-	async renderMllList(elem: OpenXmlElement) {
-		return renderMllListFn(elem, this.mathCallbacks());
-	}
 
 	// 设置元素style样式
 	renderStyleValues(style: Record<string, string>, output: HTMLElement) {
