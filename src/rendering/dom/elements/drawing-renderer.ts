@@ -1,5 +1,5 @@
 import Konva from 'konva';
-import { DomType, OpenXmlElement } from '@docx/ooxml/wordprocessingml/model/element';
+import { DomType, OpenXmlElement, WrapType } from '@docx/ooxml/wordprocessingml/model/element';
 import { WmlDrawing, WmlImage } from '@docx/ooxml/drawingml/model/drawing';
 import { getPresetGeometryPaths } from '@docx/ooxml/drawingml/shapes/preset-geometry';
 import { VmlElement } from '@docx/ooxml/vml/vml';
@@ -33,6 +33,10 @@ async function waitForImageDecode(image: HTMLImageElement): Promise<void> {
 	}
 }
 
+function isOutOfFlowDrawing(elem: WmlDrawing, output: HTMLElement): boolean {
+	return elem.props?.wrapType === WrapType.None || output.style.position === 'absolute';
+}
+
 export async function renderDrawing(
 	elem: WmlDrawing,
 	parent: HTMLElement,
@@ -54,11 +58,14 @@ export async function renderDrawing(
 		ctx.renderStyleValues(elem.cssStyle, oDrawing);
 	}
 
+	const outOfFlow = isOutOfFlowDrawing(elem, oDrawing);
+	if (outOfFlow) {
+		oDrawing.dataset.overflow = Overflow.SKIP;
+	}
+
 	const isOverflow = await ctx.appendChildren(parent, oDrawing);
-	await ctx.runWithoutOverflowChecking(() => ctx.renderChildren(elem, oDrawing));
-	oDrawing.dataset.overflow = oDrawing.style.position === 'absolute'
-		? Overflow.SKIP
-		: isOverflow;
+	await ctx.runWithoutOverflowTracking(() => ctx.renderChildren(elem, oDrawing));
+	oDrawing.dataset.overflow = outOfFlow ? Overflow.SKIP : isOverflow;
 	return oDrawing;
 }
 

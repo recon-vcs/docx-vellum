@@ -323,7 +323,7 @@ export class HtmlRendererSync {
 			// core render operations
 			appendChildren: (p, c) => this.appendChildren(p, c),
 			appendChildrenWithoutOverflow: (p, c) => appendChildrenSync(p, c),
-			runWithoutOverflowChecking: callback => this.runWithoutOverflowChecking(callback),
+			runWithoutOverflowTracking: callback => this.runWithoutOverflowTracking(callback),
 			renderChildren: (e, p) => this.renderChildren(e, p),
 			renderElements: (ch, p) => this.renderElements(ch, p),
 			renderElement: (e, p) => this.renderElement(e, p),
@@ -625,7 +625,7 @@ export class HtmlRendererSync {
 		});
 	}
 
-	private async runWithoutOverflowChecking<T>(callback: () => Promise<T>): Promise<T> {
+	private async runWithoutOverflowTracking<T>(callback: () => Promise<T>): Promise<T> {
 		this.session.overflowSuppressionDepth += 1;
 		try {
 			return await callback();

@@ -9,8 +9,7 @@ export function isOverflowing(metrics: OverflowMetrics): boolean {
 	return metrics.clientHeight < metrics.scrollHeight;
 }
 
-export function measureElementOverflow(el: HTMLElement): boolean {
-	const currentOverflow = getComputedStyle(el).overflow;
+function withSkippedOverflowElementsHidden<T>(el: HTMLElement, measure: () => T): T {
 	const skippedElements = Array.from(el.querySelectorAll<HTMLElement>('[data-overflow="skip"]'));
 	const skippedDisplayValues = skippedElements.map(item => item.style.display);
 
@@ -18,20 +17,30 @@ export function measureElementOverflow(el: HTMLElement): boolean {
 		item.style.display = 'none';
 	}
 
+	try {
+		return measure();
+	} finally {
+		for (let i = 0; i < skippedElements.length; i++) {
+			skippedElements[i].style.display = skippedDisplayValues[i];
+		}
+	}
+}
+
+export function measureElementOverflow(el: HTMLElement): boolean {
+	const currentOverflow = getComputedStyle(el).overflow;
+
 	if (!currentOverflow || currentOverflow === 'visible') {
 		el.style.overflow = 'hidden';
 	}
 
-	const overflow = isOverflowing({
-		clientHeight: el.clientHeight,
-		scrollHeight: el.scrollHeight,
-	});
-
-	el.style.overflow = currentOverflow;
-	for (let i = 0; i < skippedElements.length; i++) {
-		skippedElements[i].style.display = skippedDisplayValues[i];
+	try {
+		return withSkippedOverflowElementsHidden(el, () => isOverflowing({
+			clientHeight: el.clientHeight,
+			scrollHeight: el.scrollHeight,
+		}));
+	} finally {
+		el.style.overflow = currentOverflow;
 	}
-	return overflow;
 }
 
 export interface PageOverflowState {
