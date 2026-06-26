@@ -1,5 +1,5 @@
 import * as _ from 'lodash-es';
-import { Options } from '../../docx-preview';
+import type { Options } from '../../options';
 import { FontTablePart } from '../../font-table/font-table';
 import { ThemePart } from '../../theme/theme-part';
 import { escapeClassName } from '../../utils';

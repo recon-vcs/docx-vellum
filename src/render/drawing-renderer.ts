@@ -4,7 +4,7 @@ import type { Stage } from 'konva/lib/Stage';
 import { DomType, OpenXmlElement } from '../model/element';
 import { WmlDrawing, WmlImage } from '../model/drawing';
 import { Part } from '../common/part';
-import { Options } from '../docx-preview';
+import type { Options } from '../options';
 import { getPresetGeometryPaths } from '../shapes/preset-geometry';
 import { VmlElement } from '../vml/vml';
 import { WordDocument } from '../word-document';

@@ -1,6 +1,6 @@
 import { WordDocument } from './word-document';
 import { DomType, IDomNumbering, OpenXmlElement } from './document/dom';
-import { Options } from './docx-preview';
+import type { Options } from './options';
 import { DocumentElement } from './document/document';
 import * as _ from 'lodash-es';
 import { computePointToPixelRatio, updateTabStop } from './javascript';
