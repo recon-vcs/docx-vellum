@@ -672,6 +672,7 @@ export class HtmlRendererSync {
 			document: this.document,
 			currentPart: this.currentPart,
 			options: this.options,
+			className: this.className,
 			konvaStage: this.konva_stage,
 			konvaLayer: this.konva_layer,
 			appendChildren: (p, c) => this.appendChildren(p, c),

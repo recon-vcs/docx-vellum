@@ -22,11 +22,37 @@ test('verify zz-sample-analyze rendering after fixes', async ({ page }) => {
 		const docx = (window as unknown as HarnessWindow).docx;
 		await docx.renderSync(blob, body, styleContainer, { breakPages: true });
 		const sections = Array.from(document.querySelectorAll('section.docx-wrapper, section[class*="docx"]'));
+		const mathParagraphs = Array.from(document.querySelectorAll<HTMLElement>('.docx-math-paragraph'));
+		const mathElements = Array.from(document.querySelectorAll<HTMLElement>('math'));
+		const images = Array.from(document.querySelectorAll<HTMLImageElement>('img'));
+		const textboxes = Array.from(document.querySelectorAll<HTMLElement>('.docx-textbox'));
+
 		return {
 			pageCount: sections.length,
 			hasMathML: !!document.querySelector('math'),
 			footerTexts: Array.from(document.querySelectorAll('footer')).map(f => f.textContent?.trim()),
 			columnCounts: Array.from(document.querySelectorAll('article')).map(a => getComputedStyle(a).columnCount),
+			mathParagraphs: mathParagraphs.map(el => {
+				const style = getComputedStyle(el);
+				return {
+					tagName: el.tagName,
+					breakInside: style.breakInside || style.pageBreakInside,
+					pageBreakInside: style.pageBreakInside,
+				};
+			}),
+			mathWhiteSpace: mathElements.map(el => getComputedStyle(el).whiteSpace),
+			images: images.map(el => ({
+				complete: el.complete,
+				naturalWidth: el.naturalWidth,
+				naturalHeight: el.naturalHeight,
+			})),
+			textboxes: textboxes.map(el => {
+				const style = getComputedStyle(el);
+				return {
+					boxSizing: style.boxSizing,
+					overflow: style.overflow,
+				};
+			}),
 		};
 	});
 
@@ -34,4 +60,12 @@ test('verify zz-sample-analyze rendering after fixes', async ({ page }) => {
 	await page.screenshot({ path: 'test-results/zz-sample-full.png', fullPage: true });
 
 	expect(pageErrors).toEqual([]);
+	expect(result.pageCount).toBeGreaterThanOrEqual(1);
+	expect(result.hasMathML).toBe(true);
+	expect(result.mathParagraphs.length).toBeGreaterThan(0);
+	expect(result.mathParagraphs.every(item => item.tagName === 'DIV')).toBe(true);
+	expect(result.mathParagraphs.every(item => item.breakInside === 'avoid' || item.pageBreakInside === 'avoid')).toBe(true);
+	expect(result.mathWhiteSpace.every(value => value === 'nowrap')).toBe(true);
+	expect(result.images.every(image => image.complete && image.naturalWidth > 0 && image.naturalHeight > 0)).toBe(true);
+	expect(result.textboxes.every(textbox => textbox.boxSizing === 'border-box' && textbox.overflow === 'hidden')).toBe(true);
 });

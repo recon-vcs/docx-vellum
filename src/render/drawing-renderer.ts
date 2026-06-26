@@ -14,12 +14,25 @@ export interface DrawingRenderContext {
 	document: WordDocument;
 	currentPart: Part;
 	options: Options;
+	className: string;
 	konvaStage: Stage;
 	konvaLayer: Layer;
 	appendChildren(parent: HTMLElement | Text, children: Element): Promise<Overflow>;
 	renderChildren(elem: OpenXmlElement, parent: HTMLElement | Element | Text): Promise<Overflow>;
 	renderElement(elem: OpenXmlElement, parent?: HTMLElement | Element | Text): Promise<Node>;
 	renderStyleValues(style: Record<string, string>, output: HTMLElement): void;
+}
+
+async function waitForImageDecode(image: HTMLImageElement): Promise<void> {
+	if (typeof image.decode !== 'function') {
+		return;
+	}
+
+	try {
+		await image.decode();
+	} catch {
+		// Broken or unsupported images should still render whatever the browser can show.
+	}
 }
 
 export function createKonva(bodyContainer: HTMLElement): { stage: Stage; layer: Layer } {
@@ -41,6 +54,7 @@ export async function renderDrawing(
 	ctx: DrawingRenderContext
 ): Promise<HTMLElement> {
 	const oDrawing = createElement('span');
+	oDrawing.classList.add(`${ctx.className}-drawing`);
 	oDrawing.style.textIndent = '0px';
 	oDrawing.dataset.wrap = elem?.props.wrapType;
 	ctx.renderStyleValues(elem.cssStyle, oDrawing);
@@ -75,6 +89,7 @@ export async function renderImage(
 		oImage.src = source;
 	}
 
+	await waitForImageDecode(oImage);
 	oImage.dataset.overflow = await ctx.appendChildren(parent, oImage);
 	return oImage;
 }
@@ -119,9 +134,12 @@ export async function renderShape(
 
 	if (elem.children?.length) {
 		const oText = createElement('div');
+		oText.classList.add(`${ctx.className}-textbox`);
 		oText.style.position = 'relative';
 		oText.style.width = '100%';
 		oText.style.height = '100%';
+		oText.style.boxSizing = 'border-box';
+		oText.style.overflow = 'hidden';
 		oText.style.display = 'flex';
 		oText.style.alignItems = 'center';
 		oText.style.justifyContent = 'center';

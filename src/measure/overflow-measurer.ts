@@ -1,4 +1,4 @@
-import { appendChildren as appendChildrenUtil, checkOverflow, Overflow, ChildrenType } from '../render/dom-utils';
+import { appendChildren as appendChildrenUtil, Overflow, ChildrenType } from '../render/dom-utils';
 
 export interface OverflowMetrics {
 	clientHeight: number;
@@ -39,7 +39,7 @@ export function appendAndMeasure(
 	appendChildrenUtil(parent, children);
 	if (pageState.isSplit) return Overflow.UNKNOWN;
 	if (pageState.checkingOverflow && pageState.contentElement) {
-		return checkOverflow(pageState.contentElement) ? Overflow.TRUE : Overflow.FALSE;
+		return measureElementOverflow(pageState.contentElement) ? Overflow.TRUE : Overflow.FALSE;
 	}
 	return Overflow.UNKNOWN;
 }

@@ -30,13 +30,14 @@ export function mathJustificationToTextAlign(justification?: string): string {
 	}
 }
 
-// Render an inline math paragraph block (<span class="docx-math-paragraph">)
+// Render a math paragraph as an indivisible block.
 export async function renderMmlMathParagraph(elem: OpenXmlElement, cbs: MathRendererCallbacks): Promise<HTMLElement> {
-	const oContainer = createElement('span');
+	const oContainer = createElement('div');
 	oContainer.classList.add(`${cbs.className}-math-paragraph`);
-	oContainer.style.display = 'block';
 	oContainer.style.textAlign = mathJustificationToTextAlign(elem.props?.justification);
 	oContainer.style.textIndent = '0px';
+	oContainer.style.breakInside = 'avoid';
+	oContainer.style.whiteSpace = 'normal';
 	oContainer.dataset.overflow = await cbs.renderChildren(elem, oContainer) as string;
 	return oContainer;
 }

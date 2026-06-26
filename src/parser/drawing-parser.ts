@@ -15,6 +15,18 @@ export interface DrawingParserCallbacks {
 	parseBodyElements(node: Element): OpenXmlElement[];
 }
 
+function normalizeWrapText(wrapText: string | undefined, posX?: { align?: string }): 'left' | 'right' {
+	switch (wrapText) {
+		case 'left':
+		case 'right':
+			return wrapText;
+		case 'bothSides':
+		case 'largest':
+		default:
+			return posX?.align === 'right' ? 'left' : 'right';
+	}
+}
+
 export function parseVmlPicture(
 	elem: Element,
 	callbacks: DrawingParserCallbacks
@@ -267,7 +279,8 @@ export function parseDrawingWrapper(
 			result.props.wrapType = WrapType.Inline;
 		}
 		// 文本环绕位置：bothSides、largest、left、right
-		let { wrapText, wrapType } = result.props;
+		let { wrapType } = result.props;
+		let wrapText = normalizeWrapText(result.props.wrapText, posX);
 
 		switch (wrapType) {
 			// 顶部底部文字环绕
@@ -309,7 +322,6 @@ export function parseDrawingWrapper(
 
 			// 矩形（四周型）环绕
 			case WrapType.Square:
-				// TODO 环绕位置bothSides、largest无法实现，目前仅支持left、right
 				result.cssStyle["float"] = wrapText === 'left' ? "right" : "left";
 				// 垂直方向，纵轴位移
 				result.cssStyle["margin-top"] = `calc(${posY.offset} - ${distance.top})`;
@@ -347,9 +359,6 @@ export function parseDrawingWrapper(
 						}
 
 						break;
-					default:
-						console.error(`text wrap picture on ${wrapText} is not supported！`)
-						break;
 				}
 				// DrawML对象与文字的上下间距
 				result.cssStyle["box-sizing"] = "content-box";
@@ -364,7 +373,6 @@ export function parseDrawingWrapper(
 			case WrapType.Through:
 			// 紧密型环绕
 			case WrapType.Tight:
-				// TODO 环绕位置bothSides、largest无法实现，目前仅支持left、right
 				result.cssStyle["float"] = wrapText === 'left' ? "right" : "left";
 				// 根据多边形设置环绕
 				let { polygonData } = result.props;
@@ -405,9 +413,6 @@ export function parseDrawingWrapper(
 								result.cssStyle["margin-left"] = `calc( 50% - (${extent.width} - ${posX.offset} ) / 2 )`;
 						}
 						break;
-					default:
-						console.error(`text wrap picture on ${wrapText} is not supported！`)
-						break;
 				}
 				break;
 		}
@@ -425,7 +430,8 @@ export function parseDrawingWrapper(
 */
 export function parsePolygon(node: Element, target: OpenXmlElement): void {
 	let polygon = [];
-	let { wrapText, distance, extent, posX, posY } = target.props;
+	let { distance, extent, posX, posY } = target.props;
+	let wrapText = normalizeWrapText(target.props.wrapText, posX);
 
 	xmlUtil.foreach(node, (elem) => {
 		// 原始值，单位：EMU
@@ -505,9 +511,6 @@ export function parsePolygon(node: Element, target: OpenXmlElement): void {
 						revise_y = point_y;
 				}
 
-				break;
-			default:
-				console.error(`text wrap picture on ${wrapText} is not supported！`)
 				break;
 		}
 

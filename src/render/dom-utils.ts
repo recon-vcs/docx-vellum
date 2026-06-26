@@ -153,17 +153,6 @@ export function appendComment(elem: HTMLElement, comment: string): void {
 	elem.appendChild(document.createComment(comment));
 }
 
-// Check whether a content element has scrolled past its visible height
-export function checkOverflow(el: HTMLElement): boolean {
-	const currentOverflow = getComputedStyle(el).overflow;
-	if (!currentOverflow || currentOverflow === 'visible') {
-		el.style.overflow = 'hidden';
-	}
-	const result = el.clientHeight < el.scrollHeight;
-	el.style.overflow = currentOverflow;
-	return result;
-}
-
 // Walk up the parent chain to find the nearest ancestor of a given DomType
 export function findParent<T extends OpenXmlElement>(elem: OpenXmlElement, type: DomType): T {
 	let parent = elem.parent;

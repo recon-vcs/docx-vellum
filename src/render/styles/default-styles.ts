@@ -16,11 +16,13 @@ export function renderDefaultStyle(className: string): HTMLElement {
 			.${c} p { margin: 0pt; min-height: 1em; }
 			.${c} span { white-space: pre-wrap; overflow-wrap: break-word; }
 			.${c} math { vertical-align: middle; }
-			.${c} .${c}-math-paragraph { break-inside: avoid; }
-			.${c} .${c}-math-paragraph math { display: inline-block; max-width: 100%; }
+			.${c} .${c}-math-paragraph { break-inside: avoid; page-break-inside: avoid; overflow-wrap: normal; white-space: normal; }
+			.${c} .${c}-math-paragraph math { display: inline-block; max-width: 100%; overflow-x: auto; overflow-y: hidden; white-space: nowrap; }
+			.${c} .${c}-math-paragraph math * { overflow-wrap: normal; white-space: nowrap; }
 			.${c} a { color: inherit; text-decoration: inherit; }
-			.${c} img, ${c} svg { vertical-align: baseline; }
-			.${c} svg { fill: transparent; break-inside: avoid; }
+			.${c} img, .${c} svg { vertical-align: baseline; break-inside: avoid; page-break-inside: avoid; }
+			.${c} .${c}-drawing { display: inline-block; break-inside: avoid; page-break-inside: avoid; }
+			.${c} svg { fill: transparent; break-inside: avoid; page-break-inside: avoid; }
 			.${c} .clearfix::after { content: ""; display: block; line-height: 0; clear: both; }
 			.${c} br.break.column { break-after: column; }
 			.${c} s.break.section { display: block; }
