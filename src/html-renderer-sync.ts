@@ -492,9 +492,14 @@ export class HtmlRendererSync {
 			const rendered = await this.renderElement(elem, parent);
 			let overflow: Overflow = rendered?.dataset?.overflow as Overflow ?? Overflow.UNKNOWN;
 			let action = 'continue';
+			const acceptFirstOverflow = elem.level === 2 && i === 0;
 
 			switch (overflow) {
 				case Overflow.SELF:
+					if (acceptFirstOverflow) {
+						action = 'break-after-current';
+						break;
+					}
 					elem.breakIndex.add(0);
 					elem.parent.breakIndex.add(i);
 					removeElements(rendered, parent);
@@ -503,12 +508,20 @@ export class HtmlRendererSync {
 
 				case Overflow.TRUE:
 				case Overflow.FULL:
+					if (acceptFirstOverflow) {
+						action = 'break-after-current';
+						break;
+					}
 					elem.parent.breakIndex.add(i);
 					if (elem.type !== DomType.Cell) removeElements(rendered, parent);
 					action = 'break';
 					break;
 
 				case Overflow.PART:
+					if (acceptFirstOverflow) {
+						action = 'break-after-current';
+						break;
+					}
 					elem.parent.breakIndex.add(i);
 					action = 'break';
 					break;
@@ -523,16 +536,22 @@ export class HtmlRendererSync {
 			if (elem.type === DomType.Cell) action = 'continue';
 			overflows.push(overflow);
 
-			if (action === 'break') {
+			if (action === 'break' || action === 'break-after-current') {
 				if (elem.level === 2) {
-					if (splitContext) {
-						splitRegionOnOverflow(this.currentPage, pages, pageIndex, splitContext.regionIndex, i);
+					const overflowIndex = action === 'break-after-current' ? i + 1 : i;
+					if (overflowIndex < children.length) {
+						if (splitContext) {
+							splitRegionOnOverflow(this.currentPage, pages, pageIndex, splitContext.regionIndex, overflowIndex);
+						} else {
+							splitOnOverflow(this.currentPage, pages, pageIndex, overflowIndex);
+						}
+						processElement(this.currentPage);
+						this.currentPage = pages[pageIndex + 1];
+						await this.renderPage();
 					} else {
-						splitOnOverflow(this.currentPage, pages, pageIndex, i);
+						this.currentPage.isSplit = true;
+						pages[pageIndex] = this.currentPage;
 					}
-					processElement(this.currentPage);
-					this.currentPage = pages[pageIndex + 1];
-					await this.renderPage();
 				}
 				break;
 			}
